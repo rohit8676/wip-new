@@ -8,6 +8,7 @@ if (!isset($pageTitle)) {
     $pageTitles = [
         'dashboard.php' => 'Dashboard',
         'vendor-master.php' => 'Vendor Master',
+        'customer-master.php' => 'Customer Master',
         'rm-master.php' => 'RM Master',
         'child-part-master.php' => 'RM & Child Part Master',
         'child-master.php' => 'RM & Child Part Master',
@@ -34,6 +35,7 @@ $userRole = $currentUser['role'] ?? ($_SESSION['role'] ?? 'Staff');
 $scriptToModule = [
     'dashboard.php'         => 'dashboard',
     'vendor-master.php'     => 'vendor_master',
+    'customer-master.php'   => 'customer_master',
     'rm-master.php'         => 'rm_master',
     'child-part-master.php' => 'child_part_master',
     'child-master.php'      => 'child_part_master',

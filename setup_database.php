@@ -155,7 +155,7 @@ try {
         ['role_name' => 'Operator', 'description' => 'DPR and production operator', 'is_system' => 0, 'all' => 0],
         ['role_name' => 'User', 'description' => 'Standard user with view access', 'is_system' => 0, 'all' => 0]
     ];
-    $portalModules = ['dashboard', 'vendor_master', 'child_part_master', 'process_master', 'part_master', 'child_part_in', 'mip', 'production', 'fg_store', 'reports', 'users'];
+    $portalModules = ['dashboard', 'vendor_master', 'customer_master', 'child_part_master', 'process_master', 'part_master', 'child_part_in', 'mip', 'production', 'fg_store', 'reports', 'users'];
 
     foreach ($defaultRoles as $r) {
         $chkRole = $pdoApp->prepare("SELECT id FROM roles WHERE role_name = ?");
@@ -232,6 +232,28 @@ try {
     ";
     $pdoApp->exec($createVendorTableSql);
     echo "[OK] 'vendor_master' table is ready.\n";
+
+    // Create customer_master Table
+    $createCustomerTableSql = "
+    IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='customer_master' AND xtype='U')
+    BEGIN
+        CREATE TABLE customer_master (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            customer_code NVARCHAR(50) NOT NULL UNIQUE,
+            customer_name NVARCHAR(150) NOT NULL,
+            contact_person NVARCHAR(100) NULL,
+            phone NVARCHAR(50) NULL,
+            email NVARCHAR(100) NULL,
+            gstin NVARCHAR(50) NULL,
+            address NVARCHAR(255) NULL,
+            status NVARCHAR(50) DEFAULT 'Active',
+            created_at DATETIME DEFAULT GETDATE(),
+            updated_at DATETIME DEFAULT GETDATE()
+        );
+    END
+    ";
+    $pdoApp->exec($createCustomerTableSql);
+    echo "[OK] 'customer_master' table is ready.\n";
 
     // Create child_part_master Table
     $createChildPartTableSql = "

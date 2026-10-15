@@ -8,6 +8,7 @@ $currentScript = $activeMenu ?? basename($_SERVER['PHP_SELF']);
 // Check if any Master sub-item is active
 $isMasterActive = in_array($currentScript, [
     'vendor-master.php', 'vendor-master',
+    'customer-master.php', 'customer-master',
     'child-part-master.php', 'child-part-master',
     'child-master.php', 'child-master',
     'process-master.php', 'process-master',
@@ -28,7 +29,7 @@ $isMasterActive = in_array($currentScript, [
   <nav class="sidebar-menu">
 <?php
 // Master dropdown visibility check
-$canMaster = hasPermission('vendor_master') || hasPermission('child_part_master') || hasPermission('process_master') || hasPermission('part_master');
+$canMaster = hasPermission('vendor_master') || hasPermission('customer_master') || hasPermission('child_part_master') || hasPermission('process_master') || hasPermission('part_master');
 ?>
     <!-- 1. Dashboard -->
     <?php if (hasPermission('dashboard')): ?>
@@ -43,7 +44,7 @@ $canMaster = hasPermission('vendor_master') || hasPermission('child_part_master'
     </a>
     <?php endif; ?>
 
-    <!-- 2. Master Dropdown (Contains Vendor, Child Part, Process, Part) -->
+    <!-- 2. Master Dropdown (Contains Vendor, Customer, Child Part, Process, Part) -->
     <?php if ($canMaster): ?>
     <div class="sidebar-dropdown <?= $isMasterActive ? 'open' : '' ?>" id="masterDropdown">
       <button type="button" class="dropdown-toggle" id="masterDropdownBtn" aria-expanded="<?= $isMasterActive ? 'true' : 'false' ?>">
@@ -71,6 +72,17 @@ $canMaster = hasPermission('vendor_master') || hasPermission('child_part_master'
             <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
           </svg>
           Vendor Master
+        </a>
+        <?php endif; ?>
+
+        <!-- Sub 1b. Customer Master -->
+        <?php if (hasPermission('customer_master')): ?>
+        <a href="customer-master.php" class="submenu-item <?= ($currentScript === 'customer-master.php' || $currentScript === 'customer-master') ? 'active' : '' ?>">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+          </svg>
+          Customer Master
         </a>
         <?php endif; ?>
 

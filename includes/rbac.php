@@ -17,6 +17,7 @@ function getPortalModules() {
     return [
         'dashboard'         => ['name' => 'Dashboard', 'script' => 'dashboard.php', 'icon' => 'grid'],
         'vendor_master'     => ['name' => 'Vendor Master', 'script' => 'vendor-master.php', 'icon' => 'truck'],
+        'customer_master'   => ['name' => 'Customer Master', 'script' => 'customer-master.php', 'icon' => 'briefcase'],
         // 'rm_master'         => ['name' => 'Raw Material (RM) Master', 'script' => 'rm-master.php', 'icon' => 'box'], // Hidden as requested
         'child_part_master' => ['name' => 'RM & Child Part Master', 'script' => 'child-part-master.php', 'icon' => 'layers'],
         'process_master'    => ['name' => 'Process Master', 'script' => 'process-master.php', 'icon' => 'settings'],
