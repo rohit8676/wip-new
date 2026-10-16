@@ -123,15 +123,15 @@ try {
             $params[] = $toDate;
         }
         if (!empty($search)) {
-            $where[] = "(issue_no LIKE ? OR work_order LIKE ? OR part_code LIKE ? OR part_name LIKE ? OR department LIKE ? OR received_by LIKE ?)";
+            $where[] = "(issue_no LIKE ? OR customer_name LIKE ? OR customer_code LIKE ? OR so_number LIKE ? OR part_code LIKE ? OR part_name LIKE ? OR received_by LIKE ?)";
             $term = "%{$search}%";
-            array_push($params, $term, $term, $term, $term, $term, $term);
+            array_push($params, $term, $term, $term, $term, $term, $term, $term);
         }
 
         $sql = "
             SELECT id, issue_no, CONVERT(VARCHAR(10), issue_date, 120) AS issue_date,
-                   work_order, part_code, part_name, issued_qty, uom,
-                   department, received_by, status, remarks
+                   customer_name, customer_code, so_number, part_code, part_name, issued_qty, uom,
+                   received_by, remarks
             FROM material_issue
             WHERE " . implode(' AND ', $where) . "
             ORDER BY id DESC
@@ -143,14 +143,13 @@ try {
         $columns = [
             'issue_no' => 'Issue (MIP) No',
             'issue_date' => 'Issue Date',
-            'work_order' => 'Work Order',
+            'customer_name' => 'Customer',
+            'so_number' => 'SO Number',
             'part_code' => 'Part Code',
             'part_name' => 'Part Name',
             'issued_qty' => 'Issued Quantity',
             'uom' => 'UOM',
-            'department' => 'Department',
             'received_by' => 'Received By',
-            'status' => 'Status',
             'remarks' => 'Remarks'
         ];
 

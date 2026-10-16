@@ -23,19 +23,19 @@ function formatDateDMY($dStr) {
     return $ts ? date('d-m-Y', $ts) : $dStr;
 }
 
-// Fetch active parts, processes, and child parts data from database
+// Fetch active customers, parts, and child parts data from database
 $pdo = getDBConnection();
+$customerList = [];
 $partList = [];
-$processList = [];
 $childPartStockMap = [];
 
 if ($pdo) {
     try {
+        $stmtCust = $pdo->query("SELECT id, customer_code, customer_name FROM customer_master WHERE LOWER(status) = 'active' ORDER BY customer_name ASC");
+        $customerList = $stmtCust ? $stmtCust->fetchAll(PDO::FETCH_ASSOC) : [];
+
         $stmtParts = $pdo->query("SELECT id, part_code, part_name, child_parts FROM part_master WHERE LOWER(status) = 'active' ORDER BY part_code ASC");
         $partList = $stmtParts ? $stmtParts->fetchAll(PDO::FETCH_ASSOC) : [];
-
-        $stmtProc = $pdo->query("SELECT id, process_code, process_name FROM process_master WHERE LOWER(status) = 'active' ORDER BY process_name ASC");
-        $processList = $stmtProc ? $stmtProc->fetchAll(PDO::FETCH_ASSOC) : [];
 
         // Fetch child part master for real-time stock and UOM info
         $stmtCp = $pdo->query("SELECT part_code, part_name, grade_spec, current_stock, uom FROM child_part_master");
@@ -56,14 +56,6 @@ if ($pdo) {
     } catch (PDOException $e) {
         // Continue gracefully
     }
-}
-
-// Fallback sample processes if database is empty
-if (empty($processList)) {
-    $processList = [
-        ['process_code' => 'PROS001', 'process_name' => 'FLOOR1'],
-        ['process_code' => 'PROS002', 'process_name' => 'FLOOR2']
-    ];
 }
 
 // Parse and normalize child parts catalog for quick lookup
@@ -130,8 +122,9 @@ if ($pdo) {
         $stmtMips = $pdo->query("
             SELECT id, issue_no, 
                    CONVERT(VARCHAR(10), issue_date, 120) as issue_date,
+                   customer_name, customer_code, so_number,
                    part_code, part_name, issued_qty, uom, 
-                   work_order, department, received_by, status, remarks, 
+                   received_by, remarks, 
                    child_parts_details, created_at, updated_at
             FROM material_issue
             ORDER BY id DESC
@@ -542,7 +535,7 @@ $pageTitle = 'Material Issue for Production (MIP)';
           <div class="table-bar">
             <h2 class="box-title">Material Issue for Production (MIP)</h2>
             <div class="table-actions">
-              <input type="text" id="mipSearch" class="simple-input" placeholder="Search Issue No, Part, Work Order...">
+              <input type="text" id="mipSearch" class="simple-input" placeholder="Search Issue No, Customer, SO No, Part, Received By...">
               <?php if (hasPermission('mip', 'create')): ?>
               <button type="button" class="btn-primary" id="openAddModalBtn">+ Issue Material</button>
               <?php endif; ?>
@@ -556,13 +549,13 @@ $pageTitle = 'Material Issue for Production (MIP)';
                 <tr>
                   <th style="width: 50px; text-align: center;">Sr No.</th>
                   <th style="width: 140px;">Issue No. & Date</th>
+                  <th>Customer</th>
+                  <th style="width: 120px;">SO Number</th>
                   <th>Part Description</th>
-                  <th style="width: 110px;">Issued Qty</th>
-                  <th style="width: 70px;">UOM</th>
-                  <th>Work Order No.</th>
-                  <th>Issued To (Floor &amp; Rec. By)</th>
-                  <th style="width: 110px;">Status</th>
-                  <th style="width: 200px; text-align: center;">Action</th>
+                  <th style="width: 100px;">Issued Qty</th>
+                  <th style="width: 65px;">UOM</th>
+                  <th>Received By</th>
+                  <th style="width: 190px; text-align: center;">Action</th>
                 </tr>
               </thead>
               <tbody id="mipTableBody">
@@ -578,13 +571,13 @@ $pageTitle = 'Material Issue for Production (MIP)';
                     <tr data-id="<?php echo htmlspecialchars($item['id']); ?>"
                         data-issue_no="<?php echo htmlspecialchars($item['issue_no']); ?>"
                         data-issue_date="<?php echo htmlspecialchars($item['issue_date']); ?>"
+                        data-customer_name="<?php echo htmlspecialchars($item['customer_name'] ?? ''); ?>"
+                        data-customer_code="<?php echo htmlspecialchars($item['customer_code'] ?? ''); ?>"
+                        data-so_number="<?php echo htmlspecialchars($item['so_number'] ?? ''); ?>"
                         data-part_code="<?php echo htmlspecialchars($item['part_code']); ?>"
                         data-part_name="<?php echo htmlspecialchars($item['part_name']); ?>"
                         data-issued_qty="<?php echo htmlspecialchars($item['issued_qty']); ?>"
                         data-uom="<?php echo htmlspecialchars($item['uom']); ?>"
-                        data-work_order="<?php echo htmlspecialchars($item['work_order'] ?? ''); ?>"
-                        data-department="<?php echo htmlspecialchars($item['department'] ?? ''); ?>"
-                        data-status="<?php echo htmlspecialchars($item['status'] ?? 'Issued'); ?>"
                         data-remarks="<?php echo htmlspecialchars($item['remarks'] ?? ''); ?>"
                         data-received_by="<?php echo htmlspecialchars($item['received_by'] ?? ''); ?>"
                         data-child_parts_details="<?php echo htmlspecialchars($item['child_parts_details'] ?? ''); ?>">
@@ -594,27 +587,23 @@ $pageTitle = 'Material Issue for Production (MIP)';
                         <span class="sub-meta"><?php echo htmlspecialchars(formatDateDMY($item['issue_date'])); ?></span>
                       </td>
                       <td>
+                        <strong><?php echo htmlspecialchars(!empty($item['customer_name']) ? $item['customer_name'] : '-'); ?></strong>
+                        <?php if (!empty($item['customer_code'])): ?>
+                          <span class="sub-meta"><?php echo htmlspecialchars($item['customer_code']); ?></span>
+                        <?php endif; ?>
+                      </td>
+                      <td>
+                        <strong style="color: #2563eb;"><?php echo htmlspecialchars(!empty($item['so_number']) ? $item['so_number'] : '-'); ?></strong>
+                      </td>
+                      <td>
                         <strong><?php echo htmlspecialchars($item['part_code']); ?></strong> - <?php echo htmlspecialchars($item['part_name']); ?>
                       </td>
                       <td>
                         <span class="qty-badge"><?php echo formatCleanStock($item['issued_qty']); ?></span>
                       </td>
                       <td><?php echo htmlspecialchars($item['uom']); ?></td>
-                      <td><strong><?php echo htmlspecialchars(!empty($item['work_order']) ? $item['work_order'] : '-'); ?></strong></td>
                       <td>
-                        <strong><?php echo htmlspecialchars(!empty($item['department']) ? $item['department'] : '-'); ?></strong>
-                        <?php if (!empty($item['received_by'])): ?>
-                          <br><span style="font-size:0.75rem; color:var(--text-sub);">Rec: <?php echo htmlspecialchars($item['received_by']); ?></span>
-                        <?php endif; ?>
-                      </td>
-                      <td>
-                        <?php if ($item['status'] === 'Completed'): ?>
-                          <span class="tag tag-completed">Completed</span>
-                        <?php elseif ($item['status'] === 'In Progress'): ?>
-                          <span class="tag tag-in-progress">In Progress</span>
-                        <?php else: ?>
-                          <span class="tag" style="background:#eff6ff; color:#2563eb;">Issued</span>
-                        <?php endif; ?>
+                        <strong style="color: var(--text-main);"><?php echo htmlspecialchars(!empty($item['received_by']) ? $item['received_by'] : '-'); ?></strong>
                       </td>
                       <td style="text-align: center;">
                         <div style="display: flex; gap: 4px; justify-content: center;">
@@ -659,19 +648,43 @@ $pageTitle = 'Material Issue for Production (MIP)';
 
           <div class="popup-form-grid">
             
-            <!-- 1. Issue No -->
-            <div class="form-group">
-              <label for="inputIssueNo">Issue No. *</label>
-              <input type="text" id="inputIssueNo" class="form-control" placeholder="e.g., MIP-001" value="<?php echo htmlspecialchars($nextIssueNo); ?>" required>
+            <!-- 1. Select Customer (Above MIP No) -->
+            <div class="form-group" style="grid-column: 1 / -1;">
+              <label for="inputCustomerSelect">Select Customer *</label>
+              <select id="inputCustomerSelect" class="form-control" required>
+                <?php if (empty($customerList)): ?>
+                  <option value="">-- No Active Customers Available --</option>
+                <?php else: ?>
+                  <option value="">-- Select Customer --</option>
+                  <?php foreach ($customerList as $cust): ?>
+                    <option value="<?php echo htmlspecialchars($cust['customer_name']); ?>"
+                            data-code="<?php echo htmlspecialchars($cust['customer_code'] ?? ''); ?>">
+                      <?php echo htmlspecialchars(!empty($cust['customer_code']) ? ($cust['customer_code'] . ' - ' . $cust['customer_name']) : $cust['customer_name']); ?>
+                    </option>
+                  <?php endforeach; ?>
+                <?php endif; ?>
+              </select>
             </div>
 
-            <!-- 2. Issue Date -->
-            <div class="form-group">
-              <label for="inputIssueDate">Issue Date *</label>
-              <input type="date" id="inputIssueDate" class="form-control" value="<?php echo date('Y-m-d'); ?>" required>
+            <!-- 2. Issue No (MIP No), SO Number & Issue Date -->
+            <div style="grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 16px;">
+              <div class="form-group">
+                <label for="inputIssueNo">Issue No. *</label>
+                <input type="text" id="inputIssueNo" class="form-control" placeholder="e.g., MIP-001" value="<?php echo htmlspecialchars($nextIssueNo); ?>" required>
+              </div>
+
+              <div class="form-group">
+                <label for="inputSoNumber">SO Number *</label>
+                <input type="text" id="inputSoNumber" class="form-control" placeholder="e.g., SO-1001" required>
+              </div>
+
+              <div class="form-group">
+                <label for="inputIssueDate">Issue Date *</label>
+                <input type="date" id="inputIssueDate" class="form-control" value="<?php echo date('Y-m-d'); ?>" required>
+              </div>
             </div>
 
-            <!-- 3. Select Part (Replaced Material Type and Select Item) -->
+            <!-- 4. Select Part (Replaced Material Type and Select Item) -->
             <div class="form-group" style="grid-column: 1 / -1;">
               <label for="inputPartSelect">Select Part *</label>
               <select id="inputPartSelect" class="form-control" required>
@@ -690,13 +703,13 @@ $pageTitle = 'Material Issue for Production (MIP)';
               </select>
             </div>
 
-            <!-- 4. Issued Qty -->
+            <!-- 5. Issued Qty -->
             <div class="form-group">
               <label for="inputIssueQty">Issued Quantity *</label>
               <input type="number" step="any" min="0.001" id="inputIssueQty" class="form-control" placeholder="0" required>
             </div>
 
-            <!-- 5. UOM -->
+            <!-- 6. UOM -->
             <div class="form-group">
               <label for="inputUom">UOM *</label>
               <select id="inputUom" class="form-control" required>
@@ -743,45 +756,16 @@ $pageTitle = 'Material Issue for Production (MIP)';
               </div>
             </div>
 
-            <!-- 6. Work Order No -->
+            <!-- 7. Received By (Required) -->
             <div class="form-group">
-              <label for="inputWorkOrder">Work Order / Job No. *</label>
-              <input type="text" id="inputWorkOrder" class="form-control" placeholder="e.g., WO-2026-105" required>
+              <label for="inputReceivedBy">Received By *</label>
+              <input type="text" id="inputReceivedBy" class="form-control" placeholder="Name of person receiving material" required>
             </div>
 
-            <!-- 7. Department / Shop Floor (Dynamic from Process Master) -->
-            <div class="form-group">
-              <label for="inputDepartment">Issued To (Floor / Line) *</label>
-              <select id="inputDepartment" class="form-control" required>
-                <option value="">-- Select Process / Floor --</option>
-                <?php foreach ($processList as $proc): ?>
-                  <option value="<?php echo htmlspecialchars($proc['process_name']); ?>">
-                    <?php echo htmlspecialchars($proc['process_name']); ?>
-                  </option>
-                <?php endforeach; ?>
-              </select>
-            </div>
-
-            <!-- 8. Status -->
-            <div class="form-group">
-              <label for="inputStatus">Status *</label>
-              <select id="inputStatus" class="form-control" required>
-                <option value="Issued" selected>Issued</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Completed">Completed</option>
-              </select>
-            </div>
-
-            <!-- 9. Remarks -->
+            <!-- 8. Remarks -->
             <div class="form-group">
               <label for="inputRemarks">Remarks</label>
               <input type="text" id="inputRemarks" class="form-control" placeholder="Notes or instructions">
-            </div>
-
-            <!-- 10. Received By -->
-            <div class="form-group">
-              <label for="inputReceivedBy">Received By</label>
-              <input type="text" id="inputReceivedBy" class="form-control" placeholder="Name of person receiving material">
             </div>
 
           </div>
@@ -838,6 +822,14 @@ $pageTitle = 'Material Issue for Production (MIP)';
             <div style="font-size: 0.88rem; font-weight: 700; color: var(--text-main); margin-top: 2px;" id="viewIssueNoDate"></div>
           </div>
           <div>
+            <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-sub); font-weight: 600;">Customer</div>
+            <div style="font-size: 0.88rem; font-weight: 700; color: var(--text-main); margin-top: 2px;" id="viewCustomerName"></div>
+          </div>
+          <div>
+            <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-sub); font-weight: 600;">SO Number</div>
+            <div style="font-size: 0.88rem; font-weight: 700; color: #2563eb; margin-top: 2px;" id="viewSoNumber">-</div>
+          </div>
+          <div>
             <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-sub); font-weight: 600;">Part Code & Name</div>
             <div style="font-size: 0.88rem; font-weight: 700; color: var(--text-main); margin-top: 2px;" id="viewPartName"></div>
           </div>
@@ -846,20 +838,8 @@ $pageTitle = 'Material Issue for Production (MIP)';
             <div style="font-size: 0.88rem; font-weight: 700; color: var(--primary); margin-top: 2px;" id="viewIssuedQty"></div>
           </div>
           <div>
-            <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-sub); font-weight: 600;">Work Order</div>
-            <div style="font-size: 0.88rem; font-weight: 700; color: var(--text-main); margin-top: 2px;" id="viewWorkOrder"></div>
-          </div>
-          <div>
-            <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-sub); font-weight: 600;">Issued To (Floor)</div>
-            <div style="font-size: 0.88rem; font-weight: 600; color: var(--text-main); margin-top: 2px;" id="viewDepartment"></div>
-          </div>
-          <div>
             <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-sub); font-weight: 600;">Received By</div>
             <div style="font-size: 0.88rem; font-weight: 600; color: var(--text-main); margin-top: 2px;" id="viewReceivedBy">-</div>
-          </div>
-          <div>
-            <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-sub); font-weight: 600;">Status</div>
-            <div style="margin-top: 2px;" id="viewStatusTag"></div>
           </div>
         </div>
 
@@ -994,22 +974,16 @@ $pageTitle = 'Material Issue for Production (MIP)';
       tr.setAttribute('data-id', item.id);
       tr.setAttribute('data-issue_no', item.issue_no);
       tr.setAttribute('data-issue_date', item.issue_date);
+      tr.setAttribute('data-customer_name', item.customer_name || '');
+      tr.setAttribute('data-customer_code', item.customer_code || '');
+      tr.setAttribute('data-so_number', item.so_number || '');
       tr.setAttribute('data-part_code', item.part_code);
       tr.setAttribute('data-part_name', item.part_name);
       tr.setAttribute('data-issued_qty', item.issued_qty);
       tr.setAttribute('data-uom', item.uom);
-      tr.setAttribute('data-work_order', item.work_order || '');
-      tr.setAttribute('data-department', item.department || '');
-      tr.setAttribute('data-status', item.status || 'Issued');
       tr.setAttribute('data-remarks', item.remarks || '');
       tr.setAttribute('data-received_by', item.received_by || '');
       tr.setAttribute('data-child_parts_details', typeof item.child_parts_details === 'string' ? item.child_parts_details : JSON.stringify(item.child_parts_details || []));
-
-      const statusTag = item.status === 'Completed'
-        ? '<span class="tag tag-completed">Completed</span>'
-        : (item.status === 'In Progress'
-            ? '<span class="tag tag-in-progress">In Progress</span>'
-            : '<span class="tag" style="background:#eff6ff; color:#2563eb;">Issued</span>');
 
       tr.innerHTML = `
         <td style="color: var(--text-sub); font-weight: 600; text-align: center;">1</td>
@@ -1018,18 +992,22 @@ $pageTitle = 'Material Issue for Production (MIP)';
           <span class="sub-meta">${formatDateDMY(item.issue_date)}</span>
         </td>
         <td>
+          <strong>${escapeHtml(item.customer_name || '-')}</strong>
+          ${item.customer_code ? `<span class="sub-meta">${escapeHtml(item.customer_code)}</span>` : ''}
+        </td>
+        <td>
+          <strong style="color: #2563eb;">${escapeHtml(item.so_number || '-')}</strong>
+        </td>
+        <td>
           <strong>${escapeHtml(item.part_code)}</strong> - ${escapeHtml(item.part_name)}
         </td>
         <td>
           <span class="qty-badge">${formatStock(item.issued_qty)}</span>
         </td>
         <td>${escapeHtml(item.uom)}</td>
-        <td><strong>${escapeHtml(item.work_order || '-')}</strong></td>
         <td>
-          <strong style="color:#1e293b;">${escapeHtml(item.department || '-')}</strong>
-          ${item.received_by ? `<br><span style="font-size:0.75rem; color:var(--text-sub);">Rec: ${escapeHtml(item.received_by)}</span>` : ''}
+          <strong style="color: var(--text-main);">${escapeHtml(item.received_by || '-')}</strong>
         </td>
-        <td>${statusTag}</td>
         <td style="text-align: center;">
           <div style="display: flex; gap: 4px; justify-content: center;">
             <button type="button" class="btn-view" title="View Details">View</button>
@@ -1051,6 +1029,8 @@ $pageTitle = 'Material Issue for Production (MIP)';
       const modalFormTitle = document.getElementById('modalFormTitle');
       const editItemId = document.getElementById('editItemId');
 
+      const inputCustomerSelect = document.getElementById('inputCustomerSelect');
+      const inputSoNumber = document.getElementById('inputSoNumber');
       const inputPartSelect = document.getElementById('inputPartSelect');
       const inputIssueQty = document.getElementById('inputIssueQty');
       const inputUom = document.getElementById('inputUom');
@@ -1325,13 +1305,13 @@ $pageTitle = 'Material Issue for Production (MIP)';
           }
         } catch(e) {}
         document.getElementById('inputIssueDate').value = new Date().toISOString().split('T')[0];
-        document.getElementById('inputUom').value = 'NOS';
-        document.getElementById('inputIssueQty').value = '';
-        document.getElementById('inputWorkOrder').value = '';
-        document.getElementById('inputRemarks').value = '';
-        document.getElementById('inputReceivedBy').value = '';
-        document.getElementById('inputStatus').value = 'Issued';
+        inputCustomerSelect.value = '';
+        inputSoNumber.value = '';
         inputPartSelect.value = '';
+        document.getElementById('inputIssueQty').value = '';
+        document.getElementById('inputUom').value = 'NOS';
+        document.getElementById('inputReceivedBy').value = '';
+        document.getElementById('inputRemarks').value = '';
         await refreshChildPartStock();
         renderChildPartsRequirement();
         openModal('+ Issue Material for Production');
@@ -1357,23 +1337,42 @@ $pageTitle = 'Material Issue for Production (MIP)';
         const id = editItemId.value;
         const issueNo = document.getElementById('inputIssueNo').value.trim();
         const issueDate = document.getElementById('inputIssueDate').value.trim();
+        
+        const custSel = inputCustomerSelect.options[inputCustomerSelect.selectedIndex];
+        const customerName = custSel ? custSel.value : '';
+        const customerCode = custSel ? (custSel.getAttribute('data-code') || '') : '';
+        const soNumber = inputSoNumber.value.trim();
+
         const sel = inputPartSelect.options[inputPartSelect.selectedIndex];
         const partCode = sel ? sel.value : '';
         const partName = sel ? (sel.getAttribute('data-name') || '') : '';
         const qty = parseFloat(document.getElementById('inputIssueQty').value || 0);
         const uom = document.getElementById('inputUom').value.trim() || 'NOS';
-        const workOrder = document.getElementById('inputWorkOrder').value.trim();
-        const department = document.getElementById('inputDepartment').value;
-        const status = document.getElementById('inputStatus').value;
-        const remarks = document.getElementById('inputRemarks').value.trim();
         const receivedBy = document.getElementById('inputReceivedBy').value.trim();
+        const remarks = document.getElementById('inputRemarks').value.trim();
 
+        if (!customerName) {
+          showToast('Please select a Customer.', 'error');
+          inputCustomerSelect.focus();
+          return;
+        }
+        if (!soNumber) {
+          showToast('SO Number is required.', 'error');
+          inputSoNumber.focus();
+          return;
+        }
         if (!partCode) {
           showToast('Please select a Part.', 'error');
+          inputPartSelect.focus();
           return;
         }
         if (qty <= 0) {
           showToast('Issued quantity must be greater than 0.', 'error');
+          return;
+        }
+        if (!receivedBy) {
+          showToast('Received By is required.', 'error');
+          inputReceivedBy.focus();
           return;
         }
 
@@ -1393,15 +1392,15 @@ $pageTitle = 'Material Issue for Production (MIP)';
             id: id || undefined,
             issue_no: issueNo,
             issue_date: issueDate,
+            customer_name: customerName,
+            customer_code: customerCode,
+            so_number: soNumber,
             part_code: partCode,
             part_name: partName,
             issued_qty: qty,
             uom: uom,
-            work_order: workOrder,
-            department: department,
-            status: status,
-            remarks: remarks,
-            received_by: receivedBy
+            received_by: receivedBy,
+            remarks: remarks
           };
 
           const res = await fetch('api/mip.php', {
@@ -1717,6 +1716,17 @@ $pageTitle = 'Material Issue for Production (MIP)';
 
             <table class="meta-table">
               <tr>
+                <td class="lbl">Customer:</td>
+                <td class="val">
+                  <strong>${escapeHtml(data.customerName || '-')}</strong>
+                  ${data.customerCode ? ` <span style="color:#64748b; font-size:11px;">(${escapeHtml(data.customerCode)})</span>` : ''}
+                </td>
+                <td class="lbl">SO Number:</td>
+                <td class="val">
+                  <strong style="color: #1e3a8a;">${escapeHtml(data.soNumber || '-')}</strong>
+                </td>
+              </tr>
+              <tr>
                 <td class="lbl">Part Code & Name:</td>
                 <td class="val" colspan="3"><strong>${escapeHtml(data.partCode)}</strong> - ${escapeHtml(data.partName)}</td>
               </tr>
@@ -1731,24 +1741,14 @@ $pageTitle = 'Material Issue for Production (MIP)';
                     </div>
                   </div>` : `<strong>-</strong>`}
                 </td>
-                <td class="lbl">Work Order No:</td>
-                <td class="val"><strong>${escapeHtml(data.workOrder || '-')}</strong></td>
-              </tr>
-              <tr>
                 <td class="lbl">Issued Quantity:</td>
                 <td class="val"><strong>${formatStock(data.qty)} ${escapeHtml(data.uom)}</strong></td>
-                <td class="lbl">Issued To (Floor):</td>
-                <td class="val"><strong>${escapeHtml(data.department || '-')}</strong></td>
               </tr>
               <tr>
                 <td class="lbl">Received By:</td>
                 <td class="val"><strong>${escapeHtml(data.receivedBy || '-')}</strong></td>
-                <td class="lbl">Issue Status:</td>
-                <td class="val">${escapeHtml(data.status || 'Issued')}</td>
-              </tr>
-              <tr>
                 <td class="lbl">Remarks:</td>
-                <td class="val" colspan="3">${escapeHtml(data.remarks || 'None')}</td>
+                <td class="val">${escapeHtml(data.remarks || 'None')}</td>
               </tr>
             </table>
 
@@ -1831,18 +1831,11 @@ $pageTitle = 'Material Issue for Production (MIP)';
         currentViewingData = data;
         document.getElementById('viewModalTitle').textContent = `Issue Details - ${data.issueNo}`;
         document.getElementById('viewIssueNoDate').innerHTML = `${escapeHtml(data.issueNo)} <span style="font-size:0.75rem; color:var(--text-sub); display:block;">${formatDateDMY(data.issueDate)}</span>`;
+        document.getElementById('viewCustomerName').innerHTML = `<strong>${escapeHtml(data.customerName || '-')}</strong>${data.customerCode ? `<span style="font-size:0.75rem; color:var(--text-sub); display:block;">${escapeHtml(data.customerCode)}</span>` : ''}`;
+        document.getElementById('viewSoNumber').textContent = data.soNumber || '-';
         document.getElementById('viewPartName').innerHTML = `<strong>${escapeHtml(data.partCode)}</strong> - ${escapeHtml(data.partName)}`;
         document.getElementById('viewIssuedQty').textContent = `${formatStock(data.qty)} ${escapeHtml(data.uom)}`;
-        document.getElementById('viewWorkOrder').textContent = data.workOrder || '-';
-        document.getElementById('viewDepartment').textContent = data.department || '-';
         document.getElementById('viewReceivedBy').textContent = data.receivedBy || '-';
-
-        const statusTag = data.status === 'Completed'
-          ? '<span class="tag tag-completed">Completed</span>'
-          : (data.status === 'In Progress' 
-              ? '<span class="tag tag-in-progress">In Progress</span>' 
-              : '<span class="tag" style="background:#eff6ff; color:#2563eb;">Issued</span>');
-        document.getElementById('viewStatusTag').innerHTML = statusTag;
 
         const remarksRow = document.getElementById('viewRemarksRow');
         if (data.remarks) {
@@ -1850,16 +1843,6 @@ $pageTitle = 'Material Issue for Production (MIP)';
           document.getElementById('viewRemarksText').textContent = data.remarks;
         } else {
           remarksRow.style.display = 'none';
-        }
-
-        const viewReceivedByRow = document.getElementById('viewReceivedByRow');
-        if (viewReceivedByRow) {
-          if (data.receivedBy) {
-            viewReceivedByRow.style.display = 'block';
-            document.getElementById('viewReceivedByText').textContent = data.receivedBy;
-          } else {
-            viewReceivedByRow.style.display = 'none';
-          }
         }
 
         let childParts = [];
@@ -1918,15 +1901,15 @@ $pageTitle = 'Material Issue for Production (MIP)';
           id: row.getAttribute('data-id') || '',
           issueNo: row.getAttribute('data-issue_no') || '',
           issueDate: row.getAttribute('data-issue_date') || '',
+          customerName: row.getAttribute('data-customer_name') || '',
+          customerCode: row.getAttribute('data-customer_code') || '',
+          soNumber: row.getAttribute('data-so_number') || '',
           partCode: row.getAttribute('data-part_code') || '',
           partName: row.getAttribute('data-part_name') || '',
           qty: parseFloat(row.getAttribute('data-issued_qty') || 0),
           uom: row.getAttribute('data-uom') || 'NOS',
-          workOrder: row.getAttribute('data-work_order') || '',
-          department: row.getAttribute('data-department') || '',
-          status: row.getAttribute('data-status') || '',
-          remarks: row.getAttribute('data-remarks') || '',
           receivedBy: row.getAttribute('data-received_by') || '',
+          remarks: row.getAttribute('data-remarks') || '',
           childPartsDetails: row.getAttribute('data-child_parts_details') || ''
         };
       }
@@ -1955,16 +1938,28 @@ $pageTitle = 'Material Issue for Production (MIP)';
           editItemId.value = row.getAttribute('data-id');
           document.getElementById('inputIssueNo').value = row.getAttribute('data-issue_no') || '';
           document.getElementById('inputIssueDate').value = row.getAttribute('data-issue_date') || '';
+          
+          const custName = row.getAttribute('data-customer_name') || '';
+          const custCode = row.getAttribute('data-customer_code') || '';
+          inputCustomerSelect.value = custName;
+          if (inputCustomerSelect.selectedIndex === -1 && custCode) {
+            for (let opt of inputCustomerSelect.options) {
+              if (opt.getAttribute('data-code') === custCode) {
+                inputCustomerSelect.value = opt.value;
+                break;
+              }
+            }
+          }
+
+          inputSoNumber.value = row.getAttribute('data-so_number') || '';
+
           const pCode = row.getAttribute('data-part_code') || '';
           inputPartSelect.value = pCode;
 
           document.getElementById('inputIssueQty').value = row.getAttribute('data-issued_qty') || '';
           document.getElementById('inputUom').value = row.getAttribute('data-uom') || 'NOS';
-          document.getElementById('inputWorkOrder').value = row.getAttribute('data-work_order') || '';
-          document.getElementById('inputDepartment').value = row.getAttribute('data-department') || '';
-          document.getElementById('inputStatus').value = row.getAttribute('data-status') || 'Issued';
-          document.getElementById('inputRemarks').value = row.getAttribute('data-remarks') || '';
           document.getElementById('inputReceivedBy').value = row.getAttribute('data-received_by') || '';
+          document.getElementById('inputRemarks').value = row.getAttribute('data-remarks') || '';
 
           refreshChildPartStock().then(() => {
             renderChildPartsRequirement();

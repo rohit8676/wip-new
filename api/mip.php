@@ -91,8 +91,9 @@ if ($method === 'GET') {
         $stmt = $pdo->query("
             SELECT id, issue_no, 
                    CONVERT(VARCHAR(10), issue_date, 120) as issue_date,
+                   customer_name, customer_code, so_number,
                    part_code, part_name, issued_qty, uom, 
-                   work_order, department, status, remarks, received_by,
+                   remarks, received_by,
                    child_parts_details, created_at, updated_at
             FROM material_issue
             ORDER BY id DESC
@@ -192,15 +193,27 @@ if ($method === 'POST') {
     // -------------------------------------------------------------
     $issueNo = trim($data['issue_no'] ?? '');
     $issueDate = trim($data['issue_date'] ?? date('Y-m-d'));
+    $customerName = trim($data['customer_name'] ?? '');
+    $customerCode = trim($data['customer_code'] ?? '');
+    $soNumber = trim($data['so_number'] ?? '');
     $partCode = trim($data['part_code'] ?? '');
     $partName = trim($data['part_name'] ?? '');
     $issuedQty = floatval($data['issued_qty'] ?? 0);
     $uom = trim($data['uom'] ?? 'NOS');
-    $workOrder = trim($data['work_order'] ?? '');
-    $department = trim($data['department'] ?? '');
-    $status = trim($data['status'] ?? 'Issued');
     $remarks = trim($data['remarks'] ?? '');
     $receivedBy = trim($data['received_by'] ?? '');
+
+    if (empty($customerName)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Customer selection is required.']);
+        exit;
+    }
+
+    if (empty($soNumber)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'SO Number is required.']);
+        exit;
+    }
 
     if (empty($partCode)) {
         http_response_code(400);
@@ -211,6 +224,12 @@ if ($method === 'POST') {
     if ($issuedQty <= 0) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'Issued quantity must be greater than 0.']);
+        exit;
+    }
+
+    if (empty($receivedBy)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Received By is required.']);
         exit;
     }
 
@@ -321,22 +340,22 @@ if ($method === 'POST') {
                 UPDATE material_issue SET
                     issue_no = ?,
                     issue_date = ?,
+                    customer_name = ?,
+                    customer_code = ?,
+                    so_number = ?,
                     part_code = ?,
                     part_name = ?,
                     issued_qty = ?,
                     uom = ?,
-                    work_order = ?,
-                    department = ?,
-                    status = ?,
-                    remarks = ?,
                     received_by = ?,
+                    remarks = ?,
                     child_parts_details = ?,
                     updated_at = GETDATE()
                 WHERE id = ?
             ");
             $updStmt->execute([
-                $issueNo, $issueDate, $partCode, $partName, $issuedQty, $uom,
-                $workOrder, $department, $status, $remarks, $receivedBy, $childPartsJson, $id
+                $issueNo, $issueDate, $customerName, $customerCode, $soNumber, $partCode, $partName, $issuedQty, $uom,
+                $receivedBy, $remarks, $childPartsJson, $id
             ]);
 
             // 5. Deduct new child parts stock
@@ -363,15 +382,15 @@ if ($method === 'POST') {
                     'id' => $id,
                     'issue_no' => $issueNo,
                     'issue_date' => $issueDate,
+                    'customer_name' => $customerName,
+                    'customer_code' => $customerCode,
+                    'so_number' => $soNumber,
                     'part_code' => $partCode,
                     'part_name' => $partName,
                     'issued_qty' => $issuedQty,
                     'uom' => $uom,
-                    'work_order' => $workOrder,
-                    'department' => $department,
-                    'status' => $status,
-                    'remarks' => $remarks,
                     'received_by' => $receivedBy,
+                    'remarks' => $remarks,
                     'child_parts_details' => $childPartsJson
                 ]
             ]);
@@ -431,14 +450,14 @@ if ($method === 'POST') {
 
             $insertStmt = $pdo->prepare("
                 INSERT INTO material_issue (
-                    issue_no, issue_date, part_code, part_name, issued_qty, uom,
-                    work_order, department, status, remarks, received_by, child_parts_details,
+                    issue_no, issue_date, customer_name, customer_code, so_number, part_code, part_name, issued_qty, uom,
+                    received_by, remarks, child_parts_details,
                     created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
             ");
             $insertStmt->execute([
-                $issueNo, $issueDate, $partCode, $partName, $issuedQty, $uom,
-                $workOrder, $department, $status, $remarks, $receivedBy, $childPartsJson
+                $issueNo, $issueDate, $customerName, $customerCode, $soNumber, $partCode, $partName, $issuedQty, $uom,
+                $receivedBy, $remarks, $childPartsJson
             ]);
 
             $newId = intval($pdo->lastInsertId());
@@ -467,15 +486,15 @@ if ($method === 'POST') {
                     'id' => $newId,
                     'issue_no' => $issueNo,
                     'issue_date' => $issueDate,
+                    'customer_name' => $customerName,
+                    'customer_code' => $customerCode,
+                    'so_number' => $soNumber,
                     'part_code' => $partCode,
                     'part_name' => $partName,
                     'issued_qty' => $issuedQty,
                     'uom' => $uom,
-                    'work_order' => $workOrder,
-                    'department' => $department,
-                    'status' => $status,
-                    'remarks' => $remarks,
                     'received_by' => $receivedBy,
+                    'remarks' => $remarks,
                     'child_parts_details' => $childPartsJson
                 ]
             ]);
