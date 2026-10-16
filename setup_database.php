@@ -217,7 +217,7 @@ try {
     BEGIN
         CREATE TABLE vendor_master (
             id INT IDENTITY(1,1) PRIMARY KEY,
-            vendor_code NVARCHAR(50) NOT NULL UNIQUE,
+            vendor_code NVARCHAR(50) NULL,
             vendor_name NVARCHAR(150) NOT NULL,
             contact_person NVARCHAR(100) NULL,
             phone NVARCHAR(50) NULL,
@@ -239,7 +239,7 @@ try {
     BEGIN
         CREATE TABLE customer_master (
             id INT IDENTITY(1,1) PRIMARY KEY,
-            customer_code NVARCHAR(50) NOT NULL UNIQUE,
+            customer_code NVARCHAR(50) NULL,
             customer_name NVARCHAR(150) NOT NULL,
             contact_person NVARCHAR(100) NULL,
             phone NVARCHAR(50) NULL,

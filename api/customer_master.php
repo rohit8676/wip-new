@@ -33,7 +33,7 @@ try {
         $pdo->exec("
             CREATE TABLE customer_master (
                 id INT IDENTITY(1,1) PRIMARY KEY,
-                customer_code NVARCHAR(50) NOT NULL UNIQUE,
+                customer_code NVARCHAR(50) NULL,
                 customer_name NVARCHAR(150) NOT NULL,
                 contact_person NVARCHAR(100) NULL,
                 phone NVARCHAR(50) NULL,
@@ -124,10 +124,10 @@ if ($method === 'POST') {
         $status = 'Active';
     }
 
-    // Validation
-    if (empty($customerCode) || empty($customerName)) {
+    // Validation - Customer Name is required
+    if (empty($customerName)) {
         http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'Customer Code and Customer Name are required.']);
+        echo json_encode(['success' => false, 'message' => 'Customer Name is required.']);
         exit;
     }
 
@@ -142,14 +142,18 @@ if ($method === 'POST') {
         }
 
         try {
-            // Check duplicate code
-            $checkStmt = $pdo->prepare("SELECT COUNT(*) as cnt FROM customer_master WHERE customer_code = ? AND id != ?");
-            $checkStmt->execute([$customerCode, $id]);
-            $exists = $checkStmt->fetch();
-            if ($exists && $exists['cnt'] > 0) {
-                http_response_code(409);
-                echo json_encode(['success' => false, 'message' => "Customer Code '{$customerCode}' is already in use by another customer."]);
-                exit;
+            $finalCustomerCode = !empty($customerCode) ? $customerCode : null;
+
+            // Check duplicate code (if code is provided)
+            if ($finalCustomerCode !== null) {
+                $checkStmt = $pdo->prepare("SELECT COUNT(*) as cnt FROM customer_master WHERE customer_code = ? AND id != ?");
+                $checkStmt->execute([$finalCustomerCode, $id]);
+                $exists = $checkStmt->fetch();
+                if ($exists && $exists['cnt'] > 0) {
+                    http_response_code(409);
+                    echo json_encode(['success' => false, 'message' => "Customer Code '{$finalCustomerCode}' is already in use by another customer."]);
+                    exit;
+                }
             }
 
             $updateStmt = $pdo->prepare("
@@ -157,9 +161,23 @@ if ($method === 'POST') {
                 SET customer_code = ?, customer_name = ?, contact_person = ?, phone = ?, email = ?, gstin = ?, address = ?, status = ?, updated_at = GETDATE()
                 WHERE id = ?
             ");
-            $updateStmt->execute([$customerCode, $customerName, $contactPerson, $phone, $email, $gstin, $address, $status, $id]);
+            $updateStmt->execute([$finalCustomerCode, $customerName, $contactPerson, $phone, $email, $gstin, $address, $status, $id]);
 
-            echo json_encode(['success' => true, 'message' => "Customer '{$customerCode}' updated successfully."]);
+            echo json_encode([
+                'success' => true, 
+                'message' => "Customer '{$customerName}' updated successfully.",
+                'data' => [
+                    'id' => $id,
+                    'customer_code' => $finalCustomerCode,
+                    'customer_name' => $customerName,
+                    'contact_person' => $contactPerson,
+                    'phone' => $phone,
+                    'email' => $email,
+                    'gstin' => $gstin,
+                    'address' => $address,
+                    'status' => $status
+                ]
+            ]);
         } catch (PDOException $e) {
             http_response_code(500);
             echo json_encode(['success' => false, 'message' => 'Update failed: ' . $e->getMessage()]);
@@ -170,30 +188,34 @@ if ($method === 'POST') {
     // 3. CREATE ACTION
     requirePermission('customer_master', 'create');
     try {
-        // Check duplicate code
-        $checkStmt = $pdo->prepare("SELECT COUNT(*) as cnt FROM customer_master WHERE customer_code = ?");
-        $checkStmt->execute([$customerCode]);
-        $exists = $checkStmt->fetch();
-        if ($exists && $exists['cnt'] > 0) {
-            http_response_code(409);
-            echo json_encode(['success' => false, 'message' => "Customer Code '{$customerCode}' already exists."]);
-            exit;
+        $finalCustomerCode = !empty($customerCode) ? $customerCode : null;
+
+        // Check duplicate code if entered manually
+        if ($finalCustomerCode !== null) {
+            $checkStmt = $pdo->prepare("SELECT COUNT(*) as cnt FROM customer_master WHERE customer_code = ?");
+            $checkStmt->execute([$finalCustomerCode]);
+            $exists = $checkStmt->fetch();
+            if ($exists && $exists['cnt'] > 0) {
+                http_response_code(409);
+                echo json_encode(['success' => false, 'message' => "Customer Code '{$finalCustomerCode}' already exists."]);
+                exit;
+            }
         }
 
         $insertStmt = $pdo->prepare("
             INSERT INTO customer_master (customer_code, customer_name, contact_person, phone, email, gstin, address, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
         ");
-        $insertStmt->execute([$customerCode, $customerName, $contactPerson, $phone, $email, $gstin, $address, $status]);
+        $insertStmt->execute([$finalCustomerCode, $customerName, $contactPerson, $phone, $email, $gstin, $address, $status]);
 
         $newId = $pdo->lastInsertId();
 
         echo json_encode([
             'success' => true,
-            'message' => "Customer '{$customerCode}' created successfully.",
+            'message' => "Customer '{$customerName}' created successfully.",
             'data' => [
                 'id' => $newId,
-                'customer_code' => $customerCode,
+                'customer_code' => $finalCustomerCode,
                 'customer_name' => $customerName,
                 'contact_person' => $contactPerson,
                 'phone' => $phone,

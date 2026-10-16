@@ -381,7 +381,7 @@ if ($pdo) {
                       $isActive = (strcasecmp($item['status'] ?? 'Active', 'Active') === 0);
                     ?>
                     <tr data-id="<?php echo htmlspecialchars($item['id']); ?>">
-                      <td><strong><?php echo htmlspecialchars($item['vendor_code']); ?></strong></td>
+                      <td><strong><?php echo htmlspecialchars($item['vendor_code'] ?: '-'); ?></strong></td>
                       <td><?php echo htmlspecialchars($item['vendor_name']); ?></td>
                       <td><?php echo htmlspecialchars($item['contact_person'] ?: '-'); ?></td>
                       <td><?php echo htmlspecialchars($item['phone'] ?: '-'); ?></td>
@@ -442,8 +442,8 @@ if ($pdo) {
             
             <!-- 1. Vendor Code -->
             <div class="vm-form-group">
-              <label for="inputVendorCode">Vendor Code *</label>
-              <input type="text" id="inputVendorCode" class="form-control" placeholder="e.g., VND-007" required>
+              <label for="inputVendorCode">Vendor Code</label>
+              <input type="text" id="inputVendorCode" class="form-control" placeholder="e.g., VND-007 (Optional)">
             </div>
 
             <!-- 2. Vendor Name -->
@@ -761,11 +761,14 @@ if ($pdo) {
               </div>
             `;
 
+            const savedCode = result.data?.vendor_code || '';
+            const displayCode = savedCode || '-';
+
             if (id > 0) {
               // Update row in table
               const row = vendorTableBody.querySelector(`tr[data-id="${id}"]`);
               if (row) {
-                row.children[0].innerHTML = `<strong>${code}</strong>`;
+                row.children[0].innerHTML = `<strong>${displayCode}</strong>`;
                 row.children[1].textContent = name;
                 row.children[2].textContent = contact || '-';
                 row.children[3].textContent = phone || '-';
@@ -775,7 +778,7 @@ if ($pdo) {
                 row.children[7].innerHTML = activeTag;
                 row.children[8].innerHTML = actionHtml;
               }
-              showToast(`Vendor "${code}" updated successfully..`, 'success');
+              showToast(`Vendor "${name}" updated successfully.`, 'success');
             } else {
               // Remove empty state message if exists
               const emptyRow = document.getElementById('emptyTableRow');
@@ -786,7 +789,7 @@ if ($pdo) {
               const tr = document.createElement('tr');
               tr.setAttribute('data-id', newId);
               tr.innerHTML = `
-                <td><strong>${code}</strong></td>
+                <td><strong>${displayCode}</strong></td>
                 <td>${name}</td>
                 <td>${contact || '-'}</td>
                 <td>${phone || '-'}</td>
@@ -797,7 +800,8 @@ if ($pdo) {
                 <td>${actionHtml}</td>
               `;
               vendorTableBody.prepend(tr);
-              showToast(`New Vendor "${code}" saved successfully.`, 'success');
+              const codeNotice = savedCode ? ` (${savedCode})` : '';
+              showToast(`New Vendor "${name}"${codeNotice} saved successfully.`, 'success');
             }
 
             closeModal();
@@ -832,7 +836,7 @@ if ($pdo) {
             const address = cells[6].textContent.trim();
             const status = cells[7].textContent.trim().toLowerCase().includes('active') ? 'Active' : 'Inactive';
 
-            document.getElementById('inputVendorCode').value = code;
+            document.getElementById('inputVendorCode').value = (code === '-' ? '' : code);
             document.getElementById('inputVendorName').value = name;
             document.getElementById('inputContactPerson').value = contact === '-' ? '' : contact;
             document.getElementById('inputPhone').value = phone === '-' ? '' : phone;
@@ -842,17 +846,18 @@ if ($pdo) {
             document.getElementById('inputStatus').value = status;
 
             editVendorId.value = itemId;
-            openModal(`Edit Vendor: ${code}`, 'Update Vendor');
+            openModal((code && code !== '-') ? `Edit Vendor: ${code}` : `Edit Vendor: ${name}`, 'Update Vendor');
           }
 
           // Delete Action: Show Confirm Popup Modal
           if (e.target.classList.contains('btn-delete')) {
             const code = row.children[0].textContent.trim();
+            const name = row.children[1].textContent.trim();
             pendingDeleteId = itemId;
-            pendingDeleteCode = code;
+            pendingDeleteCode = (code && code !== '-') ? code : name;
             pendingDeleteRow = row;
 
-            if (deleteTargetCode) deleteTargetCode.textContent = code;
+            if (deleteTargetCode) deleteTargetCode.textContent = (code && code !== '-') ? code : name;
             if (deleteConfirmModal) {
               deleteConfirmModal.classList.add('active');
               document.body.style.overflow = 'hidden';

@@ -18,7 +18,7 @@ if ($pdo) {
             $pdo->exec("
                 CREATE TABLE customer_master (
                     id INT IDENTITY(1,1) PRIMARY KEY,
-                    customer_code NVARCHAR(50) NOT NULL UNIQUE,
+                    customer_code NVARCHAR(50) NULL,
                     customer_name NVARCHAR(150) NOT NULL,
                     contact_person NVARCHAR(100) NULL,
                     phone NVARCHAR(50) NULL,
@@ -401,7 +401,7 @@ if ($pdo) {
                       $isActive = (strcasecmp($item['status'] ?? 'Active', 'Active') === 0);
                     ?>
                     <tr data-id="<?php echo htmlspecialchars($item['id']); ?>">
-                      <td><strong><?php echo htmlspecialchars($item['customer_code']); ?></strong></td>
+                      <td><strong><?php echo htmlspecialchars($item['customer_code'] ?: '-'); ?></strong></td>
                       <td><?php echo htmlspecialchars($item['customer_name']); ?></td>
                       <td><?php echo htmlspecialchars($item['contact_person'] ?: '-'); ?></td>
                       <td><?php echo htmlspecialchars($item['phone'] ?: '-'); ?></td>
@@ -462,8 +462,8 @@ if ($pdo) {
             
             <!-- 1. Customer Code -->
             <div class="cm-form-group">
-              <label for="inputCustomerCode">Customer Code *</label>
-              <input type="text" id="inputCustomerCode" class="form-control" placeholder="e.g., CUST-001" required>
+              <label for="inputCustomerCode">Customer Code</label>
+              <input type="text" id="inputCustomerCode" class="form-control" placeholder="e.g., CUST-001 (Optional)">
             </div>
 
             <!-- 2. Customer Name -->
@@ -780,11 +780,14 @@ if ($pdo) {
               </div>
             `;
 
+            const savedCode = result.data?.customer_code || '';
+            const displayCode = savedCode || '-';
+
             if (id > 0) {
               // Update row in table
               const row = customerTableBody.querySelector(`tr[data-id="${id}"]`);
               if (row) {
-                row.children[0].innerHTML = `<strong>${code}</strong>`;
+                row.children[0].innerHTML = `<strong>${displayCode}</strong>`;
                 row.children[1].textContent = name;
                 row.children[2].textContent = contact || '-';
                 row.children[3].textContent = phone || '-';
@@ -794,7 +797,7 @@ if ($pdo) {
                 row.children[7].innerHTML = activeTag;
                 row.children[8].innerHTML = actionHtml;
               }
-              showToast(`Customer "${code}" updated successfully.`, 'success');
+              showToast(`Customer "${name}" updated successfully.`, 'success');
             } else {
               // Remove empty state message if exists
               const emptyRow = document.getElementById('emptyTableRow');
@@ -805,7 +808,7 @@ if ($pdo) {
               const tr = document.createElement('tr');
               tr.setAttribute('data-id', newId);
               tr.innerHTML = `
-                <td><strong>${code}</strong></td>
+                <td><strong>${displayCode}</strong></td>
                 <td>${name}</td>
                 <td>${contact || '-'}</td>
                 <td>${phone || '-'}</td>
@@ -816,7 +819,8 @@ if ($pdo) {
                 <td>${actionHtml}</td>
               `;
               customerTableBody.prepend(tr);
-              showToast(`New Customer "${code}" saved successfully.`, 'success');
+              const codeNotice = savedCode ? ` (${savedCode})` : '';
+              showToast(`New Customer "${name}"${codeNotice} saved successfully.`, 'success');
             }
 
             closeModal();
@@ -851,7 +855,7 @@ if ($pdo) {
             const address = cells[6].textContent.trim();
             const status = cells[7].textContent.trim().toLowerCase().includes('active') ? 'Active' : 'Inactive';
 
-            document.getElementById('inputCustomerCode').value = code;
+            document.getElementById('inputCustomerCode').value = (code === '-' ? '' : code);
             document.getElementById('inputCustomerName').value = name;
             document.getElementById('inputContactPerson').value = contact === '-' ? '' : contact;
             document.getElementById('inputPhone').value = phone === '-' ? '' : phone;

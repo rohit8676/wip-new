@@ -100,10 +100,10 @@ if ($method === 'POST') {
         $status = 'Active';
     }
 
-    // Validation
-    if (empty($vendorCode) || empty($vendorName)) {
+    // Validation - Vendor Name is required
+    if (empty($vendorName)) {
         http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'Vendor Code and Vendor Name are required.']);
+        echo json_encode(['success' => false, 'message' => 'Vendor Name is required.']);
         exit;
     }
 
@@ -118,14 +118,18 @@ if ($method === 'POST') {
         }
 
         try {
-            // Check duplicate code
-            $checkStmt = $pdo->prepare("SELECT COUNT(*) as cnt FROM vendor_master WHERE vendor_code = ? AND id != ?");
-            $checkStmt->execute([$vendorCode, $id]);
-            $exists = $checkStmt->fetch();
-            if ($exists && $exists['cnt'] > 0) {
-                http_response_code(409);
-                echo json_encode(['success' => false, 'message' => "Vendor Code '{$vendorCode}' is already in use by another vendor."]);
-                exit;
+            $finalVendorCode = !empty($vendorCode) ? $vendorCode : null;
+
+            // Check duplicate code (if code is provided)
+            if ($finalVendorCode !== null) {
+                $checkStmt = $pdo->prepare("SELECT COUNT(*) as cnt FROM vendor_master WHERE vendor_code = ? AND id != ?");
+                $checkStmt->execute([$finalVendorCode, $id]);
+                $exists = $checkStmt->fetch();
+                if ($exists && $exists['cnt'] > 0) {
+                    http_response_code(409);
+                    echo json_encode(['success' => false, 'message' => "Vendor Code '{$finalVendorCode}' is already in use by another vendor."]);
+                    exit;
+                }
             }
 
             $updateStmt = $pdo->prepare("
@@ -133,9 +137,23 @@ if ($method === 'POST') {
                 SET vendor_code = ?, vendor_name = ?, contact_person = ?, phone = ?, email = ?, gstin = ?, address = ?, status = ?, updated_at = GETDATE()
                 WHERE id = ?
             ");
-            $updateStmt->execute([$vendorCode, $vendorName, $contactPerson, $phone, $email, $gstin, $address, $status, $id]);
+            $updateStmt->execute([$finalVendorCode, $vendorName, $contactPerson, $phone, $email, $gstin, $address, $status, $id]);
 
-            echo json_encode(['success' => true, 'message' => "Vendor '{$vendorCode}' updated successfully."]);
+            echo json_encode([
+                'success' => true, 
+                'message' => "Vendor '{$vendorName}' updated successfully.",
+                'data' => [
+                    'id' => $id,
+                    'vendor_code' => $finalVendorCode,
+                    'vendor_name' => $vendorName,
+                    'contact_person' => $contactPerson,
+                    'phone' => $phone,
+                    'email' => $email,
+                    'gstin' => $gstin,
+                    'address' => $address,
+                    'status' => $status
+                ]
+            ]);
         } catch (PDOException $e) {
             http_response_code(500);
             echo json_encode(['success' => false, 'message' => 'Update failed: ' . $e->getMessage()]);
@@ -146,30 +164,34 @@ if ($method === 'POST') {
     // 3. CREATE ACTION
     requirePermission('vendor_master', 'create');
     try {
-        // Check duplicate code
-        $checkStmt = $pdo->prepare("SELECT COUNT(*) as cnt FROM vendor_master WHERE vendor_code = ?");
-        $checkStmt->execute([$vendorCode]);
-        $exists = $checkStmt->fetch();
-        if ($exists && $exists['cnt'] > 0) {
-            http_response_code(409);
-            echo json_encode(['success' => false, 'message' => "Vendor Code '{$vendorCode}' already exists."]);
-            exit;
+        $finalVendorCode = !empty($vendorCode) ? $vendorCode : null;
+
+        // Check duplicate code if entered manually
+        if ($finalVendorCode !== null) {
+            $checkStmt = $pdo->prepare("SELECT COUNT(*) as cnt FROM vendor_master WHERE vendor_code = ?");
+            $checkStmt->execute([$finalVendorCode]);
+            $exists = $checkStmt->fetch();
+            if ($exists && $exists['cnt'] > 0) {
+                http_response_code(409);
+                echo json_encode(['success' => false, 'message' => "Vendor Code '{$finalVendorCode}' already exists."]);
+                exit;
+            }
         }
 
         $insertStmt = $pdo->prepare("
             INSERT INTO vendor_master (vendor_code, vendor_name, contact_person, phone, email, gstin, address, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
         ");
-        $insertStmt->execute([$vendorCode, $vendorName, $contactPerson, $phone, $email, $gstin, $address, $status]);
+        $insertStmt->execute([$finalVendorCode, $vendorName, $contactPerson, $phone, $email, $gstin, $address, $status]);
 
         $newId = $pdo->lastInsertId();
 
         echo json_encode([
             'success' => true,
-            'message' => "Vendor '{$vendorCode}' created successfully.",
+            'message' => "Vendor '{$vendorName}' created successfully.",
             'data' => [
                 'id' => $newId,
-                'vendor_code' => $vendorCode,
+                'vendor_code' => $finalVendorCode,
                 'vendor_name' => $vendorName,
                 'contact_person' => $contactPerson,
                 'phone' => $phone,
