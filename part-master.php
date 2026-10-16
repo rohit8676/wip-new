@@ -1271,10 +1271,8 @@ $pageTitle = 'Part Master';
             <thead>
               <tr>
                 <th style="width: 45px; text-align: center;">#</th>
-                <th style="width: 140px; text-align: left;">Output Part Code</th>
+                <th style="width: 180px; text-align: left;">Output Part Code</th>
                 <th style="text-align: left;">Output Part Name</th>
-                <th style="width: 110px; text-align: center;">Qty / Ratio</th>
-                <th style="width: 80px; text-align: center;">UOM</th>
               </tr>
             </thead>
             <tbody id="viewVarTableBody">
@@ -1760,21 +1758,17 @@ $pageTitle = 'Part Master';
         if (viewVarCount) viewVarCount.textContent = `${variants.length} ${variants.length === 1 ? 'variant' : 'variants'}`;
         if (viewVarTableBody) {
           if (!Array.isArray(variants) || variants.length === 0) {
-            viewVarTableBody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#94a3b8; padding:14px; font-style:italic;">No Output Variants defined.</td></tr>`;
+            viewVarTableBody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#94a3b8; padding:14px; font-style:italic;">No Output Variants defined.</td></tr>`;
           } else {
             let varRowsHtml = '';
             variants.forEach((ov, idx) => {
               const code = escapeHtml(ov.code || '');
               const name = escapeHtml(ov.name || '-');
-              const qty = escapeHtml(ov.qty || 1);
-              const uom = escapeHtml(ov.uom || 'NOS');
               varRowsHtml += `
                 <tr>
                   <td style="text-align: center; font-weight: 600; color: #64748b;">${idx + 1}</td>
                   <td><strong style="color: var(--primary); font-size: 0.88rem;">${code}</strong></td>
                   <td style="font-weight: 500; color: #1e293b;">${name}</td>
-                  <td style="text-align: center; font-weight: 700; color: #0f172a;">${qty}</td>
-                  <td style="text-align: center;"><span class="uom-pill">${uom}</span></td>
                 </tr>
               `;
             });

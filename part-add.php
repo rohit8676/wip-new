@@ -945,10 +945,8 @@ if ($pdo) {
                   <thead>
                     <tr>
                       <th style="width: 50px; text-align: center;">#</th>
-                      <th style="width: 160px;">Output Part Code.</th>
-                      <th style="min-width: 260px;">Output Part Name</th>
-                      <th style="width: 130px;">Qty/Ratio</th>
-                      <th style="width: 120px; text-align: center;">UOM</th>
+                      <th style="width: 220px;">Output Part Code.</th>
+                      <th style="min-width: 280px;">Output Part Name</th>
                       <th style="width: 100px; text-align: center;">ACTION</th>
                     </tr>
                   </thead>
@@ -996,6 +994,7 @@ if ($pdo) {
       const prcTableBody = document.getElementById('prcTableBody');
       const savePartBtn = document.getElementById('savePartBtn');
       const outputVariantsTableBody = document.getElementById('outputVariantsTableBody');
+      const inputPartCode = document.getElementById('inputPartCode');
       const toastContainer = document.getElementById('toastContainer');
 
       // PDF File Upload Handler
@@ -1097,6 +1096,17 @@ if ($pdo) {
         }, 4000);
       };
 
+      // Helper to escape HTML characters
+      function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
       // Re-index serial numbers (1, 2, 3, 4...) across table rows
       function reindexRows(tbody) {
         const rows = tbody.querySelectorAll('tr');
@@ -1106,40 +1116,109 @@ if ($pdo) {
         });
       }
 
-      // Real-time duplicate check for Child Parts
-      function checkDuplicateChildParts(triggeredSelect = null) {
+      // Real-time update child part dropdown options to exclude already selected parts
+      function updateChildPartDropdowns() {
         const rows = cpTableBody.querySelectorAll('tr');
-        const codeMap = {};
-        
-        rows.forEach(row => {
-          const sel = row.querySelector('.cp-select');
-          if (sel) {
-            const val = sel.value.trim().toLowerCase();
-            if (val) {
-              if (!codeMap[val]) codeMap[val] = [];
-              codeMap[val].push(sel);
-            }
+        const selectedValues = new Set();
+        rows.forEach(r => {
+          const sel = r.querySelector('.cp-select');
+          if (sel && sel.value.trim()) {
+            selectedValues.add(sel.value.trim().toLowerCase());
           }
         });
 
-        let hasDup = false;
-        rows.forEach(row => {
-          const sel = row.querySelector('.cp-select');
-          if (sel) {
-            const val = sel.value.trim().toLowerCase();
-            if (val && codeMap[val] && codeMap[val].length > 1) {
-              sel.classList.add('is-invalid');
-              hasDup = true;
-              if (triggeredSelect && sel === triggeredSelect) {
-                showToast(`Child Part "${sel.value.trim()}" is already added. Same part cannot be selected multiple times!`, 'error');
+        rows.forEach(r => {
+          const sel = r.querySelector('.cp-select');
+          if (!sel) return;
+
+          const currentVal = (sel.value || '').trim();
+          const currentValLower = currentVal.toLowerCase();
+
+          sel.innerHTML = '';
+          const defaultOpt = document.createElement('option');
+          defaultOpt.value = '';
+          defaultOpt.textContent = '--Select Child Part--';
+          sel.appendChild(defaultOpt);
+
+          let countAvailable = 0;
+          availableChildParts.forEach(cp => {
+            const cpCode = (cp.part_code || '').trim();
+            const cpCodeLower = cpCode.toLowerCase();
+
+            // Include if not selected elsewhere OR if it is the current selection for this row
+            if (!selectedValues.has(cpCodeLower) || cpCodeLower === currentValLower) {
+              countAvailable++;
+              const opt = document.createElement('option');
+              opt.value = cpCode;
+              opt.setAttribute('data-name', cp.part_name || '');
+              opt.setAttribute('data-spec', cp.grade_spec || '-');
+              opt.setAttribute('data-uom', cp.uom || 'NOS');
+              opt.textContent = `${cpCode} - ${cp.part_name || ''}`;
+              if (cpCodeLower === currentValLower) {
+                opt.selected = true;
               }
-            } else if (val) {
-              sel.classList.remove('is-invalid');
+              sel.appendChild(opt);
             }
+          });
+
+          if (countAvailable === 0 && !currentVal) {
+            defaultOpt.textContent = '--All Child Parts Selected--';
+          }
+        });
+      }
+
+      // Real-time update process dropdown options to exclude already selected processes
+      function updateProcessDropdowns() {
+        const rows = prcTableBody.querySelectorAll('tr');
+        const selectedValues = new Set();
+        rows.forEach(r => {
+          const sel = r.querySelector('.prc-select');
+          if (sel && sel.value.trim()) {
+            selectedValues.add(sel.value.trim().toLowerCase());
           }
         });
 
-        return hasDup;
+        rows.forEach(r => {
+          const sel = r.querySelector('.prc-select');
+          if (!sel) return;
+
+          const currentVal = (sel.value || '').trim();
+          const currentValLower = currentVal.toLowerCase();
+
+          sel.innerHTML = '';
+          const defaultOpt = document.createElement('option');
+          defaultOpt.value = '';
+          defaultOpt.textContent = '--Select Process--';
+          sel.appendChild(defaultOpt);
+
+          let countAvailable = 0;
+          availableProcesses.forEach(prc => {
+            const prcName = (prc.process_name || '').trim();
+            const prcNameLower = prcName.toLowerCase();
+            const prcCode = (prc.process_code || '').trim();
+            const prcCodeLower = prcCode.toLowerCase();
+
+            const isSelectedElsewhere = selectedValues.has(prcNameLower) || selectedValues.has(prcCodeLower);
+            const isCurrent = (prcNameLower === currentValLower || prcCodeLower === currentValLower);
+
+            if (!isSelectedElsewhere || isCurrent) {
+              countAvailable++;
+              const opt = document.createElement('option');
+              opt.value = prcName;
+              opt.setAttribute('data-code', prcCode);
+              opt.setAttribute('data-desc', prc.remarks || '');
+              opt.textContent = `${prcCode} - ${prcName}`;
+              if (isCurrent) {
+                opt.selected = true;
+              }
+              sel.appendChild(opt);
+            }
+          });
+
+          if (countAvailable === 0 && !currentVal) {
+            defaultOpt.textContent = '--All Processes Selected--';
+          }
+        });
       }
 
       // Real-time duplicate check for Output Variant Codes
@@ -1192,7 +1271,7 @@ if ($pdo) {
           if (isSel) {
             initialUom = cp.uom || 'NOS';
           }
-          selectOptions += `<option value="${cp.part_code}" data-name="${cp.part_name}" data-spec="${cp.grade_spec || '-'}" data-uom="${cp.uom || 'NOS'}" ${isSel}>${cp.part_code} - ${cp.part_name}</option>`;
+          selectOptions += `<option value="${escapeHtml(cp.part_code)}" data-name="${escapeHtml(cp.part_name)}" data-spec="${escapeHtml(cp.grade_spec || '-')}" data-uom="${escapeHtml(cp.uom || 'NOS')}" ${isSel}>${escapeHtml(cp.part_code)} - ${escapeHtml(cp.part_name)}</option>`;
         });
 
         tr.innerHTML = `
@@ -1225,7 +1304,6 @@ if ($pdo) {
           </td>
         `;
 
-        // Update UOM dynamically when child part selection changes
         const selectEl = tr.querySelector('.cp-select');
         const uomBadge = tr.querySelector('.cp-uom');
 
@@ -1233,12 +1311,25 @@ if ($pdo) {
           const opt = selectEl.options[selectEl.selectedIndex];
           const uom = (opt && opt.value) ? (opt.getAttribute('data-uom') || 'NOS') : 'NOS';
           uomBadge.textContent = uom;
-          checkDuplicateChildParts(selectEl);
+          selectEl.classList.remove('is-invalid');
+          updateChildPartDropdowns();
         });
 
         // Inline Add button (+) handler
         tr.querySelector('.btn-add-cp-inline').addEventListener('click', () => {
+          if (!selectEl.value) {
+            showToast('Please select a child part in the current row before adding another.', 'info');
+            selectEl.focus();
+            return;
+          }
+          const currentSelects = cpTableBody.querySelectorAll('.cp-select');
+          const selectedCount = Array.from(currentSelects).filter(s => s.value).length;
+          if (selectedCount >= availableChildParts.length && availableChildParts.length > 0) {
+            showToast('All available child parts have already been selected.', 'info');
+            return;
+          }
           addCpRow('', 1, tr);
+          updateChildPartDropdowns();
         });
 
         // Inline Remove button (-) handler
@@ -1246,13 +1337,13 @@ if ($pdo) {
           if (cpTableBody.querySelectorAll('tr').length > 1) {
             tr.remove();
             reindexRows(cpTableBody);
-            checkDuplicateChildParts();
+            updateChildPartDropdowns();
           } else {
-            // If only 1 row left, reset its fields
             selectEl.value = '';
             tr.querySelector('.cp-qty').value = 1;
             uomBadge.textContent = 'NOS';
             selectEl.classList.remove('is-invalid');
+            updateChildPartDropdowns();
             showToast('Child part row cleared.', 'info');
           }
         });
@@ -1274,17 +1365,7 @@ if ($pdo) {
       } else {
         addCpRow('', 1);
       }
-
-      // Helper to escape HTML characters
-      function escapeHtml(str) {
-        if (!str) return '';
-        return String(str)
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#039;');
-      }
+      updateChildPartDropdowns();
 
       // ==========================================
       // 2. REQUIRED PROCESSES TABLE ROWS LOGIC
@@ -1331,7 +1412,6 @@ if ($pdo) {
           </td>
         `;
 
-        // Update Stage details / remarks dynamically when process is selected
         const prcSelectEl = tr.querySelector('.prc-select');
         const remarksInput = tr.querySelector('.prc-remarks');
 
@@ -1341,11 +1421,25 @@ if ($pdo) {
           if (remarksInput) {
             remarksInput.value = desc;
           }
+          prcSelectEl.classList.remove('is-invalid');
+          updateProcessDropdowns();
         });
 
         // Inline Add button (+) handler
         tr.querySelector('.btn-add-prc-inline').addEventListener('click', () => {
+          if (!prcSelectEl.value) {
+            showToast('Please select a process in the current row before adding another.', 'info');
+            prcSelectEl.focus();
+            return;
+          }
+          const currentSelects = prcTableBody.querySelectorAll('.prc-select');
+          const selectedCount = Array.from(currentSelects).filter(s => s.value).length;
+          if (selectedCount >= availableProcesses.length && availableProcesses.length > 0) {
+            showToast('All available processes have already been selected.', 'info');
+            return;
+          }
           addPrcRow('', '', tr);
+          updateProcessDropdowns();
         });
 
         // Inline Remove button (-) handler
@@ -1353,10 +1447,12 @@ if ($pdo) {
           if (prcTableBody.querySelectorAll('tr').length > 1) {
             tr.remove();
             reindexRows(prcTableBody);
+            updateProcessDropdowns();
           } else {
-            // Reset row
             prcSelectEl.value = '';
             tr.querySelector('.prc-remarks').value = '';
+            prcSelectEl.classList.remove('is-invalid');
+            updateProcessDropdowns();
             showToast('Process row cleared.', 'info');
           }
         });
@@ -1378,35 +1474,33 @@ if ($pdo) {
       } else {
         addPrcRow('', '');
       }
+      updateProcessDropdowns();
 
       // ==========================================
-      // 3. OUTPUT VARIANTS TABLE ROWS LOGIC
+      // 3. OUTPUT VARIANTS TABLE ROWS LOGIC (Without Qty/Ratio & UOM)
       // ==========================================
-      function addOutputVariantRow(code = '', name = '', qty = 1, uom = 'NOS', insertAfterEl = null) {
+      // Helper to get Part Code prefix with trailing dash, e.g. "APT" -> "APT-"
+      function getPartCodePrefix(code = null) {
+        const raw = (code !== null ? code : (inputPartCode ? inputPartCode.value : '')).trim();
+        if (!raw) return '';
+        return raw.endsWith('-') ? raw : (raw + '-');
+      }
+
+      function addOutputVariantRow(code = '', name = '', insertAfterEl = null) {
         const tr = document.createElement('tr');
+
+        // If code is not explicitly provided, autofill with current Part Code prefix (e.g. APT-)
+        const effectivePrefix = getPartCodePrefix();
+        const initialCode = (code !== '') ? code : effectivePrefix;
+        const currentPlaceholder = effectivePrefix ? `e.g., ${effectivePrefix}A` : 'e.g., FG-1001-A';
 
         tr.innerHTML = `
           <td class="row-num" style="text-align: center; color: #475569; font-weight: 700;">1</td>
           <td>
-            <input type="text" class="cell-input var-code" value="${escapeHtml(code)}" placeholder="e.g., FG-1001-A" required autocomplete="off">
+            <input type="text" class="cell-input var-code" value="${escapeHtml(initialCode)}" placeholder="${escapeHtml(currentPlaceholder)}" required autocomplete="off">
           </td>
           <td>
             <input type="text" class="cell-input var-name" value="${escapeHtml(name)}" placeholder="e.g., Finished Assembly Variant A" required autocomplete="off">
-          </td>
-          <td>
-            <input type="number" step="any" min="0.001" class="cell-input var-qty" value="${qty}" placeholder="1" required>
-          </td>
-          <td style="text-align: center;">
-            <select class="cell-select var-uom" required>
-              <option value="NOS" ${uom === 'NOS' ? 'selected' : ''}>NOS</option>
-              <option value="SET" ${uom === 'SET' ? 'selected' : ''}>SET</option>
-              <option value="PCS" ${uom === 'PCS' ? 'selected' : ''}>PCS</option>
-              <option value="KG" ${uom === 'KG' ? 'selected' : ''}>KG</option>
-              <option value="MTR" ${uom === 'MTR' ? 'selected' : ''}>MTR</option>
-              <option value="SQM" ${uom === 'SQM' ? 'selected' : ''}>SQM</option>
-              <option value="TON" ${uom === 'TON' ? 'selected' : ''}>TON</option>
-              <option value="LTR" ${uom === 'LTR' ? 'selected' : ''}>LTR</option>
-            </select>
           </td>
           <td style="text-align: center;">
             <div class="action-btn-group">
@@ -1434,9 +1528,19 @@ if ($pdo) {
           checkDuplicateVariantCodes();
         });
 
+        // Place cursor at the end when focused via tab if value ends with '-'
+        codeInput.addEventListener('focus', () => {
+          setTimeout(() => {
+            if (document.activeElement === codeInput && codeInput.selectionStart === 0 && codeInput.selectionEnd === codeInput.value.length && codeInput.value.endsWith('-')) {
+              const len = codeInput.value.length;
+              codeInput.setSelectionRange(len, len);
+            }
+          }, 0);
+        });
+
         // Inline Add button (+) handler
         tr.querySelector('.btn-add-var-inline').addEventListener('click', () => {
-          addOutputVariantRow('', '', 1, 'NOS', tr);
+          addOutputVariantRow('', '', tr);
         });
 
         // Inline Remove button (-) handler
@@ -1446,11 +1550,9 @@ if ($pdo) {
             reindexRows(outputVariantsTableBody);
             checkDuplicateVariantCodes();
           } else {
-            // Reset row
-            tr.querySelector('.var-code').value = '';
+            const prefix = getPartCodePrefix();
+            tr.querySelector('.var-code').value = prefix;
             tr.querySelector('.var-name').value = '';
-            tr.querySelector('.var-qty').value = 1;
-            tr.querySelector('.var-uom').value = 'NOS';
             tr.querySelector('.var-code').classList.remove('is-invalid');
             showToast('Output variant row cleared.', 'info');
           }
@@ -1468,11 +1570,54 @@ if ($pdo) {
       // Initialize Output Variant rows (Edit mode vs Add mode)
       if (isEditMode && Array.isArray(existingOutputVariants) && existingOutputVariants.length > 0) {
         existingOutputVariants.forEach(ov => {
-          addOutputVariantRow(ov.code || '', ov.name || '', ov.qty || 1, ov.uom || 'NOS');
+          addOutputVariantRow(ov.code || '', ov.name || '');
         });
       } else {
-        addOutputVariantRow('', '', 1, 'NOS');
+        addOutputVariantRow('', '');
       }
+
+      // Real-time synchronization of Part Code with Output Variant Codes
+      let lastPartCode = inputPartCode ? inputPartCode.value.trim() : '';
+
+      function syncVariantCodesWithPartCode() {
+        if (!inputPartCode) return;
+        const currentPartCode = inputPartCode.value.trim();
+        const oldPrefix = getPartCodePrefix(lastPartCode);
+        const newPrefix = getPartCodePrefix(currentPartCode);
+        const placeholderText = newPrefix ? `e.g., ${newPrefix}A` : 'e.g., FG-1001-A';
+
+        const rows = outputVariantsTableBody.querySelectorAll('tr');
+        rows.forEach(tr => {
+          const varCodeInput = tr.querySelector('.var-code');
+          if (!varCodeInput) return;
+
+          // Dynamically update placeholder to reflect current part code
+          varCodeInput.placeholder = placeholderText;
+
+          const currentVal = varCodeInput.value;
+
+          // 1. If empty, or matches old prefix, or matches old part code (without dash)
+          if (!currentVal || currentVal === oldPrefix || (lastPartCode && currentVal === lastPartCode)) {
+            varCodeInput.value = newPrefix;
+          }
+          // 2. If it started with old prefix, swap out old prefix with new prefix while keeping the suffix
+          else if (oldPrefix && currentVal.startsWith(oldPrefix)) {
+            const suffix = currentVal.substring(oldPrefix.length);
+            varCodeInput.value = newPrefix ? (newPrefix + suffix) : suffix;
+          }
+        });
+
+        lastPartCode = currentPartCode;
+        checkDuplicateVariantCodes();
+      }
+
+      if (inputPartCode) {
+        inputPartCode.addEventListener('input', syncVariantCodesWithPartCode);
+        inputPartCode.addEventListener('change', syncVariantCodesWithPartCode);
+      }
+
+      // Initial synchronization on page load
+      syncVariantCodesWithPartCode();
 
       // Real-time invalid border cleanup
       addPartForm.addEventListener('input', (e) => {
@@ -1598,6 +1743,7 @@ if ($pdo) {
 
         // 3. Validate [PROCESS]
         const processes = [];
+        const seenPrcNames = new Set();
         const prcRows = prcTableBody.querySelectorAll('tr');
         if (prcRows.length === 0) {
           showToast('At least one Process is required.', 'error');
@@ -1621,6 +1767,17 @@ if ($pdo) {
             return;
           }
 
+          const prcNameLower = prcName.toLowerCase();
+          if (seenPrcNames.has(prcNameLower)) {
+            showToast(`Duplicate Process "${prcName}" in row #${rowNum}. Same process cannot be selected multiple times.`, 'error');
+            if (select) {
+              select.classList.add('is-invalid');
+              select.focus();
+            }
+            return;
+          }
+          seenPrcNames.add(prcNameLower);
+
           const opt = select.options[select.selectedIndex];
           const prcCode = opt ? opt.getAttribute('data-code') : '';
           processes.push({
@@ -1630,7 +1787,7 @@ if ($pdo) {
           });
         }
 
-        // 4. Validate [Output Part Code, Output Part Name]
+        // 4. Validate [Output Part Code, Output Part Name] (No Qty/Ratio or UOM needed)
         const outputVariants = [];
         const seenVarCodes = new Set();
         const varRows = outputVariantsTableBody.querySelectorAll('tr');
@@ -1644,13 +1801,9 @@ if ($pdo) {
           const rowNum = i + 1;
           const codeInput = row.querySelector('.var-code');
           const nameInput = row.querySelector('.var-name');
-          const qtyInput = row.querySelector('.var-qty');
-          const uomSelect = row.querySelector('.var-uom');
 
           const vCode = codeInput ? codeInput.value.trim() : '';
           const vName = nameInput ? nameInput.value.trim() : '';
-          const vQty = qtyInput ? parseFloat(qtyInput.value) : 0;
-          const vUom = uomSelect ? uomSelect.value : 'NOS';
 
           if (!vCode) {
             showToast(`Output Part Code is required in Output Variant row #${rowNum}.`, 'error');
@@ -1681,20 +1834,9 @@ if ($pdo) {
             return;
           }
 
-          if (isNaN(vQty) || vQty <= 0) {
-            showToast(`Please enter a valid Qty/Ratio (> 0) in Output Variant row #${rowNum}.`, 'error');
-            if (qtyInput) {
-              qtyInput.classList.add('is-invalid');
-              qtyInput.focus();
-            }
-            return;
-          }
-
           outputVariants.push({
             code: vCode,
-            name: vName,
-            qty: vQty,
-            uom: vUom
+            name: vName
           });
         }
 

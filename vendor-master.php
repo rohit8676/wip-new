@@ -753,6 +753,7 @@ if ($pdo) {
               ? '<span class="tag tag-completed">Active</span>' 
               : '<span class="tag" style="background:#f1f5f9; color:#64748b;">Inactive</span>';
 
+              
             const actionHtml = `
               <div style="display: flex; gap: 6px;">
                 <button type="button" class="btn-edit" title="Edit Vendor">Edit</button>
@@ -774,7 +775,7 @@ if ($pdo) {
                 row.children[7].innerHTML = activeTag;
                 row.children[8].innerHTML = actionHtml;
               }
-              showToast(`Vendor "${code}" updated successfully.`, 'success');
+              showToast(`Vendor "${code}" updated successfully..`, 'success');
             } else {
               // Remove empty state message if exists
               const emptyRow = document.getElementById('emptyTableRow');

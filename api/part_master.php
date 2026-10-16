@@ -314,13 +314,22 @@ if ($method === 'POST') {
         echo json_encode(['success' => false, 'message' => 'At least one Process is required.']);
         exit;
     }
+    $seenPrcList = [];
     foreach ($processesList as $idx => $prc) {
         $rNum = $idx + 1;
-        if (empty($prc['name']) && empty($prc['code'])) {
+        $prcName = trim($prc['name'] ?? $prc['code'] ?? '');
+        if (empty($prcName)) {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => "Please select a Process in row #{$rNum}."]);
             exit;
         }
+        $prcNameLower = strtolower($prcName);
+        if (isset($seenPrcList[$prcNameLower])) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => "Duplicate Process '{$prcName}' in row #{$rNum}. Same process cannot be selected multiple times."]);
+            exit;
+        }
+        $seenPrcList[$prcNameLower] = true;
     }
 
     // Validate Output Variants [Output Part Code, Output Part Name]
@@ -350,11 +359,6 @@ if ($method === 'POST') {
         if (empty($ov['name'])) {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => "Output Part Name is required in Output Variant row #{$rNum}."]);
-            exit;
-        }
-        if (!isset($ov['qty']) || floatval($ov['qty']) <= 0) {
-            http_response_code(400);
-            echo json_encode(['success' => false, 'message' => "Quantity/Ratio must be greater than 0 in Output Variant row #{$rNum}."]);
             exit;
         }
     }
