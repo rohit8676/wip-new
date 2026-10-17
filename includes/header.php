@@ -76,6 +76,12 @@ $canDelete = !empty($currentModuleKey) && function_exists('hasPermission') ? has
   </div>
 
   <div class="topbar-right">
+    <?php if (!empty($headerBackUrl)): ?>
+      <a href="<?php echo htmlspecialchars($headerBackUrl); ?>" class="btn-back-link">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+        <?php echo htmlspecialchars($headerBackText ?? 'Back'); ?>
+      </a>
+    <?php endif; ?>
     <span class="user-greeting">
       Welcome, <strong><?php echo htmlspecialchars($userName); ?></strong> 
       <span style="font-size: 0.75rem; padding: 2px 7px; background: #eff6ff; color: #2563eb; border-radius: 999px; margin-left: 4px; font-weight: 600;">

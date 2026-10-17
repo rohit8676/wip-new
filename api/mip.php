@@ -209,12 +209,6 @@ if ($method === 'POST') {
         exit;
     }
 
-    if (empty($soNumber)) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'SO Number is required.']);
-        exit;
-    }
-
     if (empty($partCode)) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'Part selection is required.']);

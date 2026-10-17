@@ -55,14 +55,14 @@ try {
             $params[] = $toDate;
         }
         if (!empty($search)) {
-            $where[] = "(mip_no LIKE ? OR work_order LIKE ? OR part_code LIKE ? OR part_name LIKE ? OR operator_name LIKE ? OR process_name LIKE ?)";
+            $where[] = "(mip_no LIKE ? OR customer_name LIKE ? OR so_number LIKE ? OR part_code LIKE ? OR part_name LIKE ? OR operator_name LIKE ? OR process_name LIKE ?)";
             $term = "%{$search}%";
-            array_push($params, $term, $term, $term, $term, $term, $term);
+            array_push($params, $term, $term, $term, $term, $term, $term, $term);
         }
 
         $sql = "
-            SELECT id, mip_no, work_order, part_code, part_name,
-                   process_name, shift, target_qty, ok_qty, rejected_qty,
+            SELECT id, mip_no, customer_name, so_number, part_code, part_name,
+                   process_name, target_qty, ok_qty, rejected_qty,
                    operator_name, uom, status,
                    CONVERT(VARCHAR(16), created_at, 120) AS created_at
             FROM production_entry
@@ -75,11 +75,11 @@ try {
 
         $columns = [
             'mip_no' => 'MIP No',
-            'work_order' => 'Work Order',
+            'customer_name' => 'Customer',
+            'so_number' => 'SO Number',
             'part_code' => 'Part Code',
             'part_name' => 'Part Name',
-            'process_name' => 'Process / Floor',
-            'shift' => 'Shift',
+            'process_name' => 'Process Stage',
             'target_qty' => 'Target Plan',
             'ok_qty' => 'OK Output',
             'rejected_qty' => 'Rejection / Scrap',

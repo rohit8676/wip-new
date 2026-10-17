@@ -7,20 +7,24 @@ require_once __DIR__ . '/auth/check_auth.php';
 require_once __DIR__ . '/config/db.php';
 
 // Format numbers cleanly
-function formatCleanNum($val, $decimals = 0) {
-    $f = floatval($val ?? 0);
-    if ($f == (int)$f && $decimals == 0) {
-        return number_format($f, 0);
+if (!function_exists('formatCleanNum')) {
+    function formatCleanNum($val, $decimals = 0) {
+        $f = floatval($val ?? 0);
+        if ($f == (int)$f && $decimals == 0) {
+            return number_format($f, 0);
+        }
+        return rtrim(rtrim(number_format($f, 3), '0'), '.');
     }
-    return rtrim(rtrim(number_format($f, 3), '0'), '.');
 }
 
 // Format date to DD-MM-YYYY
-function formatDateDMY($dStr) {
-    if (empty($dStr)) return '';
-    $clean = explode('T', (string)$dStr)[0];
-    $ts = strtotime($clean);
-    return $ts ? date('d-m-Y', $ts) : $dStr;
+if (!function_exists('formatDateDMY')) {
+    function formatDateDMY($dStr) {
+        if (empty($dStr)) return '';
+        $clean = explode('T', (string)$dStr)[0];
+        $ts = strtotime($clean);
+        return $ts ? date('d-m-Y', $ts) : $dStr;
+    }
 }
 
 // Fetch active parts and processes from database
@@ -28,6 +32,7 @@ $pdo = getDBConnection();
 $partList = [];
 $processList = [];
 $mipList = [];
+$customerList = [];
 
 $todayDmy = date('d-m-Y');
 $todaySqlDate = date('Y-m-d');
@@ -35,17 +40,23 @@ $yesterdaySqlDate = date('Y-m-d', strtotime('-1 day'));
 
 if ($pdo) {
     try {
-        $stmtParts = $pdo->query("SELECT id, part_code, part_name, child_parts FROM part_master WHERE status = 'Active' ORDER BY part_code ASC");
+        $stmtParts = $pdo->query("SELECT id, part_code, part_name, child_parts, processes FROM part_master WHERE status = 'Active' ORDER BY part_code ASC");
         $partList = $stmtParts->fetchAll(PDO::FETCH_ASSOC);
 
         $stmtProc = $pdo->query("SELECT id, process_code, process_name FROM process_master WHERE status = 'Active' ORDER BY process_name ASC");
         $processList = $stmtProc->fetchAll(PDO::FETCH_ASSOC);
 
+        $stmtCust = $pdo->query("SELECT id, customer_code, customer_name FROM customer_master WHERE status = 'Active' ORDER BY customer_name ASC");
+        if ($stmtCust) {
+            $customerList = $stmtCust->fetchAll(PDO::FETCH_ASSOC);
+        }
+
         $stmtMips = $pdo->query("
             SELECT id, issue_no, 
                    CONVERT(VARCHAR(10), issue_date, 120) as issue_date,
+                   customer_name, customer_code, so_number,
                    part_code, part_name, issued_qty, uom, 
-                   work_order, department, received_by, status, remarks, 
+                   received_by, remarks, 
                    child_parts_details
             FROM material_issue
             ORDER BY id DESC
@@ -65,14 +76,14 @@ if (empty($mipList)) {
             'id' => 1,
             'issue_no' => 'MIP-001',
             'issue_date' => $todaySqlDate,
+            'customer_name' => 'Apex Industrial Corp',
+            'customer_code' => 'CUST-001',
+            'so_number' => 'SO-2026-101',
             'part_code' => 'P1001',
             'part_name' => 'Front Mounting Assembly',
             'issued_qty' => 120,
             'uom' => 'PCS',
-            'work_order' => 'WO-2026-101',
-            'department' => 'FLOOR1',
             'received_by' => 'Ramesh Kumar',
-            'status' => 'Issued',
             'remarks' => 'Batch 1 for press line',
             'child_parts_details' => json_encode([
                 ['code' => 'CP-101', 'name' => 'Bracket Steel Plate', 'ratio' => 1, 'consumed_qty' => 120, 'uom' => 'PCS'],
@@ -83,14 +94,14 @@ if (empty($mipList)) {
             'id' => 2,
             'issue_no' => 'MIP-002',
             'issue_date' => $todaySqlDate,
+            'customer_name' => 'Bharat Auto Ltd',
+            'customer_code' => 'CUST-002',
+            'so_number' => 'SO-2026-102',
             'part_code' => 'P1002',
             'part_name' => 'Main Chassis Sub-Assembly',
             'issued_qty' => 80,
             'uom' => 'PCS',
-            'work_order' => 'WO-2026-102',
-            'department' => 'FLOOR2',
             'received_by' => 'Suresh Verma',
-            'status' => 'Issued',
             'remarks' => 'Welding bay allocation',
             'child_parts_details' => json_encode([
                 ['code' => 'CP-201', 'name' => 'Side Gusset Plate', 'ratio' => 2, 'consumed_qty' => 160, 'uom' => 'PCS'],
@@ -101,14 +112,14 @@ if (empty($mipList)) {
             'id' => 3,
             'issue_no' => 'MIP-003',
             'issue_date' => $yesterdaySqlDate,
+            'customer_name' => 'Zenith Precision',
+            'customer_code' => 'CUST-003',
+            'so_number' => 'SO-2026-098',
             'part_code' => 'P1003',
             'part_name' => 'Support Bracket Assembly',
             'issued_qty' => 100,
             'uom' => 'PCS',
-            'work_order' => 'WO-2026-098',
-            'department' => 'FLOOR1',
             'received_by' => 'Rajesh Singh',
-            'status' => 'Issued',
             'remarks' => 'Laser profiling requirement',
             'child_parts_details' => json_encode([
                 ['code' => 'CP-301', 'name' => 'L-Bracket Base', 'ratio' => 1, 'consumed_qty' => 100, 'uom' => 'PCS'],
@@ -177,7 +188,7 @@ $todayOutput = 0;
 if ($pdo) {
     try {
         $stmtPrd = $pdo->query("
-            SELECT id, mip_no, work_order, part_code, part_name,
+            SELECT id, mip_no, customer_name, customer_code, so_number, work_order, part_code, part_name,
                    department, received_by, process_name, shift,
                    target_qty, ok_qty, rejected_qty,
                    operator_name, uom, status,
@@ -644,17 +655,8 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
             
             <div class="table-actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
               <!-- Search Input -->
-              <input type="text" id="prdSearch" class="simple-input" style="min-width: 220px;" placeholder="Search MIP No, Part, Work Order, Operator...">
+              <input type="text" id="prdSearch" class="simple-input" style="min-width: 220px;" placeholder="Search MIP No, Customer, SO No, Part, Operator...">
               
-              <!-- Filter by Shift -->
-              <select id="filterShift" class="simple-input" style="width: auto;">
-                <option value="">All Shifts</option>
-                <option value="Shift A">Shift A (Morning)</option>
-                <option value="Shift B">Shift B (Evening)</option>
-                <option value="Shift C">Shift C (Night)</option>
-                <option value="General Shift">General Shift</option>
-              </select>
-
               <!-- Filter by Status -->
               <select id="filterStatus" class="simple-input" style="width: auto;">
                 <option value="">All Status</option>
@@ -665,7 +667,7 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
 
               <!-- + Log Production Button -->
               <?php if (hasPermission('production', 'create')): ?>
-              <button type="button" class="btn-primary" id="openAddPrdModalBtn">+ Log Production</button>
+              <a href="production-add.php" class="btn-primary" id="openAddPrdModalBtn" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">+ Log Production</a>
               <?php endif; ?>
             </div>
           </div>
@@ -677,20 +679,17 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
                 <tr>
                   <th style="width: 45px; text-align: center;">#</th>
                   <th style="text-align: center; white-space: nowrap;">Date</th>
-                  <th style="white-space: nowrap;">MIP No. &amp; WO</th>
-                  <th style="white-space: nowrap;">Part Description</th>
-                  <th style="white-space: nowrap;">Process &amp; Shift</th>
-                  <th style="text-align: center; white-space: nowrap;">Target</th>
-                  <th style="text-align: center; white-space: nowrap;">OK Qty</th>
-                                    <th style="text-align: center; white-space: nowrap;">Rejected</th>
-                  <th style="white-space: nowrap;">Operator</th>
+                  <th style="white-space: nowrap;">MIP No.</th>
+                  <th style="white-space: nowrap;">Customer</th>
+                  <th style="white-space: nowrap;">Part Name</th>
+                  <th style="text-align: center; white-space: nowrap;">Target Qty</th>
                   <th style="text-align: center; white-space: nowrap;">Action</th>
                 </tr>
               </thead>
               <tbody id="prdTableBody">
                 <?php if (empty($productionList)): ?>
                   <tr id="emptyTableRow">
-                    <td colspan="10" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
+                    <td colspan="7" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
                       No production entries found. Click <strong>+ Log Production</strong> to record shop-floor output.
                     </td>
                   </tr>
@@ -699,13 +698,15 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
                   <?php foreach ($productionList as $item): ?>
                     <tr data-id="<?php echo htmlspecialchars($item['id']); ?>"
                         data-mip_no="<?php echo htmlspecialchars($item['mip_no'] ?? ''); ?>"
+                        data-customer_name="<?php echo htmlspecialchars($item['customer_name'] ?? ''); ?>"
+                        data-customer_code="<?php echo htmlspecialchars($item['customer_code'] ?? ''); ?>"
+                        data-so_number="<?php echo htmlspecialchars($item['so_number'] ?? ''); ?>"
                         data-work_order="<?php echo htmlspecialchars($item['work_order'] ?? ''); ?>"
                         data-part_code="<?php echo htmlspecialchars($item['part_code']); ?>"
                         data-part_name="<?php echo htmlspecialchars($item['part_name']); ?>"
                         data-department="<?php echo htmlspecialchars($item['department'] ?? ''); ?>"
                         data-received_by="<?php echo htmlspecialchars($item['received_by'] ?? ''); ?>"
                         data-process_name="<?php echo htmlspecialchars($item['process_name']); ?>"
-                        data-shift="<?php echo htmlspecialchars($item['shift']); ?>"
                         data-target_qty="<?php echo htmlspecialchars($item['target_qty']); ?>"
                         data-ok_qty="<?php echo htmlspecialchars($item['ok_qty']); ?>"
                         data-rejected_qty="<?php echo htmlspecialchars($item['rejected_qty'] ?? 0); ?>"
@@ -718,41 +719,23 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
                         <?php echo !empty($item['created_at']) ? date('d-m-Y', strtotime($item['created_at'])) : date('d-m-Y'); ?>
                       </td>
                       <td style="white-space: nowrap;">
-                        <strong style="color: #1e293b;"><?php echo htmlspecialchars($item['mip_no'] ?: '-'); ?></strong><br>
-                        <span style="font-size: 0.75rem; color: var(--text-sub);"><?php echo htmlspecialchars($item['work_order'] ?: '-'); ?></span>
+                        <strong style="color: #1e293b;"><?php echo htmlspecialchars($item['mip_no'] ?: '-'); ?></strong>
                       </td>
                       <td style="white-space: nowrap;">
-                        <strong><?php echo htmlspecialchars($item['part_code']); ?></strong> - <?php echo htmlspecialchars($item['part_name']); ?>
+                        <span style="font-weight: 500; color: #334155;"><?php echo htmlspecialchars($item['customer_name'] ?: '-'); ?></span>
                       </td>
                       <td style="white-space: nowrap;">
-                        <span style="font-weight: 500;"><?php echo htmlspecialchars($item['process_name']); ?></span><br>
-                        <span class="shift-tag shift-a" style="font-size: 0.7rem; padding: 1px 6px; margin-top: 3px; display: inline-block;">
-                          <?php echo htmlspecialchars($item['shift']); ?>
-                        </span>
+                        <strong><?php echo htmlspecialchars($item['part_name'] ?: $item['part_code']); ?></strong>
                       </td>
-                      <td style="text-align: center; font-variant-numeric: tabular-nums;"><?php echo formatCleanNum($item['target_qty']); ?></td>
-                      <td style="text-align: center; font-variant-numeric: tabular-nums;">
-                        <strong style="color: #059669;"><?php echo formatCleanNum($item['ok_qty']); ?></strong>
-                      </td>
-                      <td style="text-align: center; font-variant-numeric: tabular-nums;">
-                        <?php if (floatval($item['rejected_qty'] ?? 0) > 0): ?>
-                          <strong style="color: #dc2626;"><?php echo formatCleanNum($item['rejected_qty']); ?></strong>
-                        <?php else: ?>
-                          <span style="color: #94a3b8;">-</span>
-                        <?php endif; ?>
-                      </td>
-                      <td style="white-space: nowrap;">
-                        <span style="font-weight: 600; color: #1e293b;"><?php echo htmlspecialchars($item['operator_name']); ?></span>
-                        <?php if (!empty($item['received_by'])): ?>
-                          <br><span style="font-size: 0.72rem; color: var(--text-sub);">Rec: <?php echo htmlspecialchars($item['received_by']); ?></span>
-                        <?php endif; ?>
+                      <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; color: #1e293b;">
+                        <?php echo formatCleanNum($item['target_qty']); ?> <span style="font-size: 0.76rem; color: #64748b; font-weight: 500;"><?php echo htmlspecialchars($item['uom'] ?? 'PCS'); ?></span>
                       </td>
                       <td style="text-align: center;">
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; min-width: 110px;">
+                        <div style="display: flex; gap: 4px; justify-content: center;">
                           <button type="button" class="btn-view" title="View Details">View</button>
                           <button type="button" class="btn-print" title="Print Production Slip">Print</button>
                           <?php if (hasPermission('production', 'update')): ?>
-                          <button type="button" class="btn-edit" title="Edit Entry">Edit</button>
+                          <a href="production-add.php?id=<?php echo htmlspecialchars($item['id']); ?>" class="btn-edit" title="Edit Entry" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">Edit</a>
                           <?php endif; ?>
                           <?php if (hasPermission('production', 'delete')): ?>
                           <button type="button" class="btn-delete" title="Delete Entry">Delete</button>
@@ -774,195 +757,7 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
 
   </div>
 
-  <!-- =========================================================
-       Add / Edit Production Modal Form (Two-Column Layout)
-       ========================================================= -->
-  <div id="prdModal" class="modal-overlay">
-    <div class="modal-card" style="max-width: 780px;">
-      <div class="modal-header">
-        <h3 class="modal-title" id="prdModalTitle">+ Log Production Entry</h3>
-        <button type="button" class="modal-close-btn" id="closePrdModalBtn" aria-label="Close modal">&times;</button>
-      </div>
 
-      <form id="prdForm">
-        <div class="modal-body">
-          <input type="hidden" id="editPrdId" value="">
-
-          <div class="popup-form-grid">
-            
-            <!-- Scan MIP Issue Slip (Simple Plain Input Field) -->
-            <div class="form-group" style="grid-column: 1 / -1;">
-              <label for="scanMipInput">Scan MIP Issue Slip</label>
-              <input type="text" id="scanMipInput" class="form-control" placeholder="Scan barcode or enter MIP No." autocomplete="off">
-            </div>
-
-            <!-- Fetched MIP Data Simple Table (Shows right before Section 1) -->
-            <div id="fetchedMipTableWrap" class="form-group" style="grid-column: 1 / -1; display: none;">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                <span style="font-size: 0.8rem; font-weight: 700; color: var(--text-main);">
-                  Fetched Material Issue Details:
-                </span>
-                <span id="fetchedMipStatusTag" style="font-size: 0.72rem; padding: 2px 7px; border-radius: 4px; background: #ecfdf5; color: #059669; font-weight: 600; border: 1px solid #a7f3d0;">
-                  Data Loaded
-                </span>
-              </div>
-              <div style="overflow-x: auto; border: 1px solid var(--border); border-radius: 6px;">
-                <table class="simple-table" style="font-size: 0.82rem; margin: 0; width: 100%;">
-                  <thead style="background: #f8fafc;">
-                    <tr>
-                      <th style="padding: 7px 10px;">MIP No.</th>
-                      <th style="padding: 7px 10px;">Work Order</th>
-                      <th style="padding: 7px 10px;">Part Code &amp; Name</th>
-                      <th style="padding: 7px 10px; text-align: center;">Issued Qty</th>
-                      <th style="padding: 7px 10px;">Floor / Dept</th>
-                      <th style="padding: 7px 10px;">Received By</th>
-                      <th style="padding: 7px 10px; text-align: center;">Issue Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td style="padding: 8px 10px;"><strong id="tblMipNo">-</strong></td>
-                      <td style="padding: 8px 10px;"><strong id="tblMipWo">-</strong></td>
-                      <td style="padding: 8px 10px;" id="tblMipPart">-</td>
-                      <td style="padding: 8px 10px; text-align: center;"><strong id="tblMipQty" style="color: #059669;">-</strong></td>
-                      <td style="padding: 8px 10px;" id="tblMipDept">-</td>
-                      <td style="padding: 8px 10px;" id="tblMipReceivedBy">-</td>
-                      <td style="padding: 8px 10px; text-align: center;" id="tblMipDate">-</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              <!-- Child Part Details Section (BOM) -->
-              <div id="fetchedChildPartsSection" style="margin-top: 10px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                  <span style="font-size: 0.78rem; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-                    RM & Child Part Details (BOM):
-                  </span>
-                  <span id="childPartsCountBadge" style="font-size: 0.7rem; padding: 1px 7px; border-radius: 10px; background: #e0f2fe; color: #0369a1; font-weight: 600; border: 1px solid #bae6fd;">
-                    0 Items
-                  </span>
-                </div>
-                <div style="overflow-x: auto; border: 1px solid var(--border); border-radius: 6px;">
-                  <table class="simple-table" style="font-size: 0.8rem; margin: 0; width: 100%;">
-                    <thead style="background: #f8fafc;">
-                      <tr>
-                        <th style="padding: 6px 10px; width: 35px; text-align: center;">#</th>
-                        <th style="padding: 6px 10px;">RM & Child Part Code</th>
-                        <th style="padding: 6px 10px;">RM & Child Part Name</th>
-                        <th style="padding: 6px 10px; text-align: center;">BOM Ratio</th>
-                        <th style="padding: 6px 10px; text-align: center;">Total Issued / Req. Qty</th>
-                        <th style="padding: 6px 10px; text-align: center;">UOM</th>
-                      </tr>
-                    </thead>
-                    <tbody id="tblChildPartsBody">
-                      <!-- Populated dynamically via JS -->
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-
-            <!-- Production Details (Unified Single Section) -->
-            <div class="form-section-title">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
-              Production Details
-            </div>
-
-            <!-- Auto-generated & Synced Hidden Fields -->
-            <input type="hidden" id="inputWorkOrder" value="">
-            <input type="hidden" id="inputPartCode" value="">
-            <input type="hidden" id="inputPartName" value="">
-            <input type="hidden" id="inputPartSelect" value="">
-            <input type="hidden" id="inputDepartment" value="">
-            <input type="hidden" id="inputReceivedBy" value="">
-            <input type="hidden" id="inputStatus" value="Completed">
-
-            <!-- 2. Process / Stage -->
-            <div class="form-group">
-              <label for="inputProcess">Process / Stage *</label>
-              <select id="inputProcess" class="form-control" required>
-                <option value="">-- Select Process --</option>
-                <?php foreach ($processList as $pr): ?>
-                  <option value="<?php echo htmlspecialchars($pr['process_name']); ?>">
-                    <?php echo htmlspecialchars($pr['process_name']); ?>
-                  </option>
-                <?php endforeach; ?>
-              </select>
-            </div>
-            
-            <!-- 1. Shift -->
-            <div class="form-group">
-              <label for="inputShift">Shift *</label>
-              <select id="inputShift" class="form-control" required>
-                <option value="">-- Select Shift --</option>
-                <option value="Shift A">Shift A</option>
-                <option value="Shift B">Shift B</option>
-                <option value="Shift C">Shift C</option>
-                <option value="General Shift">General Shift</option>
-              </select>
-            </div>
-
-            <!-- Auto-populated UOM from Scanned MIP Slip -->
-            <input type="hidden" id="inputUom" value="PCS">
-
-            <!-- 3. Target Quantity (Readonly from Scanned MIP) -->
-            <div class="form-group">
-              <label for="inputTargetQty">Target / Planned Qty *</label>
-              <input type="number" step="any" min="1" id="inputTargetQty" class="form-control" readonly style="background: #f8fafc; cursor: not-allowed;" required>
-            </div>
-
-            <!-- 4. Produced OK Quantity -->
-            <div class="form-group">
-              <label for="inputOkQty">Produced (OK) Qty *</label>
-              <input type="number" step="any" min="0" id="inputOkQty" class="form-control" required>
-            </div>
-
-            <!-- 5. Rejected Quantity -->
-            <div class="form-group">
-              <label for="inputRejectedQty">Rejected / Scrap Qty</label>
-              <input type="number" step="any" min="0" id="inputRejectedQty" class="form-control">
-            </div>
-
-            <!-- 7. Operator Name (Moved Below Quantities) -->
-            <div class="form-group" style="grid-column: 1 / -1;">
-              <label for="inputOperator">Operator / Technician *</label>
-              <input type="text" id="inputOperator" class="form-control" placeholder="e.g., Ramesh Kumar" required>
-            </div>
-
-            <!-- 8. Live Quality / Yield Summary Calculation Box -->
-            <div class="form-group" style="grid-column: 1 / -1;">
-              <div class="yield-calc-box">
-                <div class="yield-stat-item">
-                  <span class="yield-stat-lbl">Total Inspected</span>
-                  <span class="yield-stat-val" id="calcTotalInspected">0 PCS</span>
-                </div>
-                <div class="yield-stat-item">
-                  <span class="yield-stat-lbl">Target Achievement</span>
-                  <span class="yield-stat-val" id="calcAchievement">0%</span>
-                </div>
-                <div class="yield-stat-item">
-                  <span class="yield-stat-lbl">Quality Yield Rate</span>
-                  <span class="yield-stat-val" id="calcYieldRate" style="color: #10b981;">100%</span>
-                </div>
-                <div class="yield-stat-item">
-                  <span class="yield-stat-lbl">Rejection Ratio</span>
-                  <span class="yield-stat-val" id="calcRejectionRate" style="color: #64748b;">0.0%</span>
-                </div>
-              </div>
-            </div>
-
-          </div>
-        </div>
-
-        <div class="modal-footer">
-          <button type="button" class="btn-secondary" id="cancelPrdModalBtn">Cancel</button>
-          <button type="submit" class="btn-primary" id="savePrdSubmitBtn">+ Save Production</button>
-        </div>
-      </form>
-    </div>
-  </div>
 
   <!-- =========================================================
        View Production Run Details Modal
@@ -981,7 +776,7 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
           <div>
             <div style="font-size:1.15rem; font-weight:700; color:var(--text-main);" id="vModalHeaderTitle">Production Entry Details</div>
             <div style="font-size:0.8rem; color:var(--text-sub); margin-top:2px;">
-              Date: <strong id="vCreateDate" style="color:var(--text-main);">-</strong> &nbsp;|&nbsp; Shift: <span id="vShift" class="shift-tag shift-a">Shift A</span>
+              Date: <strong id="vCreateDate" style="color:var(--text-main);">-</strong>
             </div>
           </div>
           <div id="vStatusTag">
@@ -996,16 +791,24 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
             <div style="font-weight:600; color:var(--text-main); margin-top:3px;" id="vPartDesc">-</div>
           </div>
           <div>
-            <div style="color:var(--text-sub); font-size:0.72rem; text-transform:uppercase; font-weight:600;">MIP Slip / Work Order</div>
+            <div style="color:var(--text-sub); font-size:0.72rem; text-transform:uppercase; font-weight:600;">MIP No. & SO Number</div>
             <div style="font-weight:600; color:var(--text-main); margin-top:3px;" id="vWorkOrder">-</div>
           </div>
           <div>
+            <div style="color:var(--text-sub); font-size:0.72rem; text-transform:uppercase; font-weight:600;">Customer</div>
+            <div style="font-weight:600; color:var(--text-main); margin-top:3px;" id="vCustomer">-</div>
+          </div>
+          <div>
             <div style="color:var(--text-sub); font-size:0.72rem; text-transform:uppercase; font-weight:600;">Process / Stage</div>
-            <div style="font-weight:500; color:var(--text-main); margin-top:3px;" id="vProcessMachine">-</div>
+            <div style="font-weight:600; color:var(--text-main); margin-top:3px;" id="vProcessMachine">-</div>
           </div>
           <div>
             <div style="color:var(--text-sub); font-size:0.72rem; text-transform:uppercase; font-weight:600;">Operator / Technician</div>
             <div style="font-weight:500; color:var(--text-main); margin-top:3px;" id="vPersonnel">-</div>
+          </div>
+          <div>
+            <div style="color:var(--text-sub); font-size:0.72rem; text-transform:uppercase; font-weight:600;">Material Received By</div>
+            <div style="font-weight:500; color:var(--text-main); margin-top:3px;" id="vReceivedBy">-</div>
           </div>
         </div>
 
@@ -1038,12 +841,6 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
           <div class="progress-track">
             <div class="progress-fill" id="vProgressBar" style="width: 100%;"></div>
           </div>
-        </div>
-
-        <!-- Material Issue Info -->
-        <div style="font-size: 0.82rem; color: #475569; line-height: 1.6; background: #fff; padding: 10px 14px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 12px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-          <div><strong>Floor / Dept:</strong> <span id="vDepartment">-</span></div>
-          <div><strong>Material Received By:</strong> <span id="vReceivedBy">-</span></div>
         </div>
 
         <!-- RM & Child Parts / BOM Breakdown -->
@@ -1152,27 +949,7 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
 
       const prdTableBody = document.getElementById('prdTableBody');
       const prdSearch = document.getElementById('prdSearch');
-      const filterShift = document.getElementById('filterShift');
       const filterStatus = document.getElementById('filterStatus');
-
-      const prdModal = document.getElementById('prdModal');
-      const prdModalTitle = document.getElementById('prdModalTitle');
-      const openAddPrdModalBtn = document.getElementById('openAddPrdModalBtn');
-      const closePrdModalBtn = document.getElementById('closePrdModalBtn');
-      const cancelPrdModalBtn = document.getElementById('cancelPrdModalBtn');
-      const prdForm = document.getElementById('prdForm');
-      const editPrdId = document.getElementById('editPrdId');
-
-      // Form calculation inputs
-      const inputTargetQty = document.getElementById('inputTargetQty');
-      const inputOkQty = document.getElementById('inputOkQty');
-      const inputRejectedQty = document.getElementById('inputRejectedQty');
-      const inputUom = document.getElementById('inputUom');
-
-      const calcTotalInspected = document.getElementById('calcTotalInspected');
-      const calcAchievement = document.getElementById('calcAchievement');
-      const calcYieldRate = document.getElementById('calcYieldRate');
-      const calcRejectionRate = document.getElementById('calcRejectionRate');
 
       // View Modal
       const viewPrdModal = document.getElementById('viewPrdModal');
@@ -1189,45 +966,6 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
       const deleteTargetCode = document.getElementById('deleteTargetCode');
       let pendingDeleteRow = null;
 
-      // Calculate live yield inside Add/Edit modal
-      function updateLiveYieldCalculation() {
-        const target = parseFloat(inputTargetQty.value || 0);
-        const ok = parseFloat(inputOkQty.value || 0);
-        const rej = parseFloat(inputRejectedQty.value || 0);
-        const uom = inputUom.value || 'PCS';
-
-        const totalInspected = ok + rej;
-        calcTotalInspected.textContent = `${formatNumber(totalInspected)} ${uom}`;
-
-        if (target > 0) {
-          const ach = Math.round((ok / target) * 100);
-          calcAchievement.textContent = `${ach}%`;
-        } else {
-          calcAchievement.textContent = '0%';
-        }
-
-        if (totalInspected > 0) {
-          const yRate = ((ok / totalInspected) * 100).toFixed(1);
-          const rRate = ((rej / totalInspected) * 100).toFixed(1);
-
-          calcYieldRate.textContent = `${yRate}%`;
-          calcYieldRate.style.color = yRate >= 98.0 ? '#10b981' : (yRate >= 95.0 ? '#d97706' : '#ef4444');
-
-          calcRejectionRate.textContent = `${rRate}%`;
-          calcRejectionRate.style.color = rej > 0 ? '#ef4444' : '#64748b';
-        } else {
-          calcYieldRate.textContent = '100%';
-          calcYieldRate.style.color = '#10b981';
-          calcRejectionRate.textContent = '0.0%';
-          calcRejectionRate.style.color = '#64748b';
-        }
-      }
-
-      inputTargetQty.addEventListener('input', updateLiveYieldCalculation);
-      inputOkQty.addEventListener('input', updateLiveYieldCalculation);
-      inputRejectedQty.addEventListener('input', updateLiveYieldCalculation);
-      if (inputUom) inputUom.addEventListener('change', updateLiveYieldCalculation);
-
       // Disable mouse wheel scroll changing number input values
       document.addEventListener('wheel', () => {
         if (document.activeElement && document.activeElement.type === 'number') {
@@ -1235,80 +973,28 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
         }
       });
 
-      // Filtering & Search
+      // Filtering & Search (Shift removed)
       function applyFilters() {
         const query = prdSearch.value.toLowerCase().trim();
-        const selectedShift = filterShift.value.trim();
         const selectedStatus = filterStatus.value.trim();
 
         const rows = prdTableBody.querySelectorAll('tr:not(#emptyTableRow)');
         rows.forEach(r => {
           const text = r.textContent.toLowerCase();
-          const rShift = r.getAttribute('data-shift') || '';
           const rStatus = r.getAttribute('data-status') || '';
 
           const matchesQuery = !query || text.includes(query);
-          const matchesShift = !selectedShift || rShift.includes(selectedShift);
           const matchesStatus = !selectedStatus || rStatus.toLowerCase() === selectedStatus.toLowerCase();
 
-          r.style.display = (matchesQuery && matchesShift && matchesStatus) ? '' : 'none';
+          r.style.display = (matchesQuery && matchesStatus) ? '' : 'none';
         });
       }
 
       prdSearch.addEventListener('input', applyFilters);
-      filterShift.addEventListener('change', applyFilters);
       filterStatus.addEventListener('change', applyFilters);
 
       // Modal open & close
-      function openModal(title = '+ Log Production Entry') {
-        prdModalTitle.textContent = title;
-        prdModal.classList.add('active');
-        document.body.style.overflow = 'hidden';
-      }
-
-      function closeModal() {
-        prdModal.classList.remove('active');
-        document.body.style.overflow = '';
-        prdForm.reset();
-        editPrdId.value = '';
-        if (typeof clearMipScan === 'function') {
-          clearMipScan();
-        }
-        updateLiveYieldCalculation();
-      }
-
-      openAddPrdModalBtn.addEventListener('click', () => {
-        editPrdId.value = '';
-        if (typeof clearMipScan === 'function') {
-          clearMipScan();
-        }
-        document.getElementById('inputShift').value = '';
-        document.getElementById('inputWorkOrder').value = '';
-        if (document.getElementById('inputPartSelect')) {
-          document.getElementById('inputPartSelect').value = '';
-          document.getElementById('inputPartSelect').setAttribute('data-name', '');
-        }
-        if (document.getElementById('inputPartCode')) document.getElementById('inputPartCode').value = '';
-        if (document.getElementById('inputPartName')) document.getElementById('inputPartName').value = '';
-        if (document.getElementById('inputDepartment')) document.getElementById('inputDepartment').value = '';
-        if (document.getElementById('inputReceivedBy')) document.getElementById('inputReceivedBy').value = '';
-        document.getElementById('inputProcess').value = '';
-        document.getElementById('inputOperator').value = '';
-        document.getElementById('inputTargetQty').value = '';
-        document.getElementById('inputOkQty').value = '';
-        document.getElementById('inputRejectedQty').value = '';
-        updateLiveYieldCalculation();
-        openModal('+ Log Production Entry');
-        setTimeout(() => {
-          const scanEl = document.getElementById('scanMipInput');
-          if (scanEl) scanEl.focus();
-        }, 150);
-      });
-
-      // Available MIP records from backend
-      const availableMips = <?php echo json_encode($mipList, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
-
-      // Available Parts Catalog with Child Parts (BOM)
+      // Available Parts Catalog with Child Parts (BOM) & Processes for View Details
       const partsCatalog = <?php 
         $catalog = [];
         foreach ($partList as $p) {
@@ -1317,278 +1003,26 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
         echo json_encode($catalog, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); 
       ?>;
 
-      const scanMipInput = document.getElementById('scanMipInput');
 
-      function clearMipScan() {
-        if (scanMipInput) scanMipInput.value = '';
-        const tblWrap = document.getElementById('fetchedMipTableWrap');
-        if (tblWrap) tblWrap.style.display = 'none';
-        const tbody = document.getElementById('tblChildPartsBody');
-        if (tbody) tbody.innerHTML = '';
-        const countBadge = document.getElementById('childPartsCountBadge');
-        if (countBadge) countBadge.textContent = '0 Items';
-        const elRecBy = document.getElementById('tblMipReceivedBy');
-        if (elRecBy) elRecBy.textContent = '-';
-        if (document.getElementById('inputPartSelect')) {
-          document.getElementById('inputPartSelect').value = '';
-          document.getElementById('inputPartSelect').setAttribute('data-name', '');
-        }
-        if (document.getElementById('inputPartCode')) document.getElementById('inputPartCode').value = '';
-        if (document.getElementById('inputPartName')) document.getElementById('inputPartName').value = '';
-        if (document.getElementById('inputDepartment')) document.getElementById('inputDepartment').value = '';
-        if (document.getElementById('inputReceivedBy')) document.getElementById('inputReceivedBy').value = '';
-      }
 
-      function renderChildParts(match, issuedQty) {
-        const tbody = document.getElementById('tblChildPartsBody');
-        const countBadge = document.getElementById('childPartsCountBadge');
-        if (!tbody) return;
-        tbody.innerHTML = '';
 
-        let childParts = [];
 
-        // 1. Try parsing child_parts_details from MIP record
-        if (match && match.child_parts_details) {
-          try {
-            if (typeof match.child_parts_details === 'string') {
-              childParts = JSON.parse(match.child_parts_details);
-            } else if (Array.isArray(match.child_parts_details)) {
-              childParts = match.child_parts_details;
-            }
-          } catch (e) {
-            childParts = [];
-          }
-        }
 
-        // 2. If empty, fallback to BOM from partsCatalog
-        if ((!childParts || childParts.length === 0) && match && match.part_code && partsCatalog[match.part_code]) {
-          try {
-            const pData = partsCatalog[match.part_code];
-            let bom = [];
-            if (typeof pData.child_parts === 'string') {
-              bom = JSON.parse(pData.child_parts || '[]');
-            } else if (Array.isArray(pData.child_parts)) {
-              bom = pData.child_parts;
-            }
-            if (Array.isArray(bom) && bom.length > 0) {
-              const parentQty = parseFloat(issuedQty || match.issued_qty || 0);
-              childParts = bom.map(cp => {
-                const ratio = parseFloat(cp.qty || cp.ratio || 1) || 1;
-                return {
-                  code: cp.code || cp.part_code || '',
-                  name: cp.name || cp.part_name || '',
-                  ratio: ratio,
-                  consumed_qty: ratio * parentQty,
-                  uom: cp.uom || 'NOS'
-                };
-              });
-            }
-          } catch (e) {
-            // ignore
-          }
-        }
 
-        // 3. Render rows into child parts table
-        if (Array.isArray(childParts) && childParts.length > 0) {
-          if (countBadge) countBadge.textContent = `${childParts.length} Item${childParts.length > 1 ? 's' : ''}`;
-          childParts.forEach((cp, idx) => {
-            const cCode = cp.code || cp.part_code || '-';
-            const cName = cp.name || cp.part_name || '-';
-            const ratio = parseFloat(cp.ratio || cp.qty || 1);
-            let totalQty = cp.consumed_qty !== undefined ? parseFloat(cp.consumed_qty) : (ratio * parseFloat(issuedQty || 0));
-            if (isNaN(totalQty)) totalQty = ratio * parseFloat(issuedQty || 0);
-            const uom = cp.uom || 'NOS';
 
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-              <td style="padding: 6px 10px; text-align: center; color: var(--text-sub);">${idx + 1}</td>
-              <td style="padding: 6px 10px;"><strong style="color: #1e293b;">${escapeHtml(cCode)}</strong></td>
-              <td style="padding: 6px 10px; color: #334155;">${escapeHtml(cName)}</td>
-              <td style="padding: 6px 10px; text-align: center;"><span style="background: #f1f5f9; padding: 2px 7px; border-radius: 4px; font-weight: 600; font-size: 0.76rem;">1 : ${ratio}</span></td>
-              <td style="padding: 6px 10px; text-align: center;"><strong style="color: #0284c7;">${Number.isInteger(totalQty) ? totalQty : totalQty.toFixed(2)}</strong></td>
-              <td style="padding: 6px 10px; text-align: center;"><span style="color: #64748b; font-size: 0.76rem;">${escapeHtml(uom)}</span></td>
-            `;
-            tbody.appendChild(tr);
-          });
-        } else {
-          if (countBadge) countBadge.textContent = '0 Items';
-          tbody.innerHTML = `
-            <tr>
-              <td colspan="6" style="padding: 8px 10px; text-align: center; color: #94a3b8; font-style: italic;">
-                No RM & child parts linked with this assembly / MIP slip
-              </td>
-            </tr>
-          `;
-        }
-      }
-
-      async function fetchScannedMip(code) {
-        const query = (code || '').trim().toLowerCase();
-        if (!query) return;
-
-        // Search in preloaded MIP list by issue_no or work_order
-        let match = availableMips.find(m => 
-          (m.issue_no && m.issue_no.toLowerCase() === query) ||
-          (m.work_order && m.work_order.toLowerCase() === query)
-        );
-
-        // Fallback: If not found in preloaded list, fetch live from api/mip.php
-        if (!match) {
-          try {
-            const res = await fetch('api/mip.php');
-            const resJson = await res.json();
-            if (resJson.status === 'success' && Array.isArray(resJson.data)) {
-              resJson.data.forEach(item => {
-                if (!availableMips.find(m => m.issue_no === item.issue_no)) {
-                  availableMips.push(item);
-                }
-              });
-              match = availableMips.find(m => 
-                (m.issue_no && m.issue_no.toLowerCase() === query) ||
-                (m.work_order && m.work_order.toLowerCase() === query)
-              );
-            }
-          } catch (e) {
-            // ignore network errors
-          }
-        }
-
-        const tblWrap = document.getElementById('fetchedMipTableWrap');
-
-        if (match) {
-          // ── Duplicate MIP check ──────────────────────────────────────
-          // If we are in ADD mode (no editPrdId), block duplicate MIP no.
-          const currentEditId = editPrdId ? editPrdId.value : '';
-          const existingRows = prdTableBody ? prdTableBody.querySelectorAll('tr[data-mip_no]') : [];
-          let dupRow = null;
-          existingRows.forEach(r => {
-            const rowMip = (r.getAttribute('data-mip_no') || '').trim().toLowerCase();
-            const rowId  = (r.getAttribute('data-id') || '').trim();
-            if (rowMip && rowMip === match.issue_no.toLowerCase()) {
-              // Only flag as duplicate if this is NOT the row currently being edited
-              if (!currentEditId || rowId !== currentEditId) {
-                dupRow = r;
-              }
-            }
-          });
-
-          if (dupRow) {
-            showToast(
-              `MIP slip "${match.issue_no}" is already logged in production. Duplicate entries are not allowed.`,
-              'error'
-            );
-            if (scanMipInput) {
-              scanMipInput.value = '';
-              scanMipInput.focus();
-            }
-            if (tblWrap) tblWrap.style.display = 'none';
-            return; // ── stop here ──
-          }
-          // ─────────────────────────────────────────────────────────────
-
-          // 1. Auto-fill Work Order
-          if (match.work_order) {
-            document.getElementById('inputWorkOrder').value = match.work_order;
-          }
-
-          // 2. Auto-fill Part (code & name in hidden fields)
-          const pCode = match.part_code || '';
-          const pName = match.part_name || (partsCatalog[pCode] ? partsCatalog[pCode].part_name : pCode);
-          const partSelect = document.getElementById('inputPartSelect');
-          const partCodeInput = document.getElementById('inputPartCode');
-          const partNameInput = document.getElementById('inputPartName');
-          if (partSelect) {
-            partSelect.value = pCode;
-            partSelect.setAttribute('data-name', pName);
-          }
-          if (partCodeInput) partCodeInput.value = pCode;
-          if (partNameInput) partNameInput.value = pName;
-          if (document.getElementById('inputDepartment')) {
-            document.getElementById('inputDepartment').value = match.department || '';
-          }
-          if (document.getElementById('inputReceivedBy')) {
-            document.getElementById('inputReceivedBy').value = match.received_by || '';
-          }
-
-          // 3. Auto-fill Target Quantity from Issued Qty
-          const qty = parseFloat(match.issued_qty || 0);
-          if (qty > 0) {
-            document.getElementById('inputTargetQty').value = qty;
-          }
-
-          // 4. Auto-fill UOM
-          const uomEl = document.getElementById('inputUom');
-          if (uomEl && match.uom) {
-            uomEl.value = match.uom;
-          }
-
-          // 5. Populate Fetched Data Simple Table
-          const elNo = document.getElementById('tblMipNo');
-          const elWo = document.getElementById('tblMipWo');
-          const elPart = document.getElementById('tblMipPart');
-          const elQty = document.getElementById('tblMipQty');
-          const elDept = document.getElementById('tblMipDept');
-          const elReceivedBy = document.getElementById('tblMipReceivedBy');
-          const elDate = document.getElementById('tblMipDate');
-
-          if (elNo) elNo.textContent = match.issue_no;
-          if (elWo) elWo.textContent = match.work_order || '-';
-          if (elPart) elPart.textContent = `${match.part_code} - ${match.part_name || ''}`;
-          if (elQty) elQty.textContent = `${qty} ${match.uom || 'PCS'}`;
-          if (elDept) elDept.textContent = match.department || '-';
-          if (elReceivedBy) elReceivedBy.textContent = match.received_by || '-';
-          if (elDate) elDate.textContent = formatDateDMY(match.issue_date || '');
-
-          // 6. Populate Child Parts Details Table
-          renderChildParts(match, qty);
-
-          if (tblWrap) tblWrap.style.display = 'block';
-
-          updateLiveYieldCalculation();
-          showToast(`MIP slip ${match.issue_no} scanned & loaded!`, 'success');
-
-          // Auto-advance focus to Process dropdown for quick shop-floor entry
-          const procEl = document.getElementById('inputProcess');
-          if (procEl) procEl.focus();
-
-        } else {
-          if (tblWrap) tblWrap.style.display = 'none';
-          showToast(`No MIP slip found for "${code}"`, 'error');
-        }
-      }
-
-      if (scanMipInput) {
-        scanMipInput.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            fetchScannedMip(scanMipInput.value);
-          }
-        });
-        scanMipInput.addEventListener('change', () => {
-          fetchScannedMip(scanMipInput.value);
-        });
-      }
-
-      closePrdModalBtn.addEventListener('click', closeModal);
-      cancelPrdModalBtn.addEventListener('click', closeModal);
-
-      // Create / Update Row Helper
-      function getShiftClass(shiftStr) {
-        if (shiftStr.includes('Shift B')) return 'shift-b';
-        if (shiftStr.includes('Shift C')) return 'shift-c';
-        return 'shift-a';
-      }
 
       function populateRow(tr, data) {
         tr.setAttribute('data-id', data.id);
         tr.setAttribute('data-mip_no', data.mip_no || '');
+        tr.setAttribute('data-customer_name', data.customer_name || '');
+        tr.setAttribute('data-customer_code', data.customer_code || '');
+        tr.setAttribute('data-so_number', data.so_number || '');
         tr.setAttribute('data-work_order', data.work_order || '');
         tr.setAttribute('data-part_code', data.part_code);
         tr.setAttribute('data-part_name', data.part_name);
         tr.setAttribute('data-department', data.department || '');
         tr.setAttribute('data-received_by', data.received_by || '');
         tr.setAttribute('data-process_name', data.process_name);
-        tr.setAttribute('data-shift', data.shift);
         tr.setAttribute('data-target_qty', data.target_qty);
         tr.setAttribute('data-ok_qty', data.ok_qty);
         tr.setAttribute('data-rejected_qty', data.rejected_qty || 0);
@@ -1610,153 +1044,36 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
             ${escapeHtml(createDateStr)}
           </td>
           <td style="white-space: nowrap;">
-            <strong style="color: #1e293b;">${escapeHtml(data.mip_no || '-')}</strong><br>
-            <span style="font-size: 0.75rem; color: var(--text-sub);">${escapeHtml(data.work_order || '-')}</span>
+            <strong style="color: #1e293b;">${escapeHtml(data.mip_no || '-')}</strong>
           </td>
           <td style="white-space: nowrap;">
-            <strong>${escapeHtml(data.part_code)}</strong> - ${escapeHtml(data.part_name)}
+            <span style="font-weight: 500; color: #334155;">${escapeHtml(data.customer_name || '-')}</span>
           </td>
           <td style="white-space: nowrap;">
-            <span style="font-weight: 500;">${escapeHtml(data.process_name)}</span><br>
-            <span class="shift-tag shift-a" style="font-size: 0.7rem; padding: 1px 6px; margin-top: 3px; display: inline-block;">${escapeHtml(data.shift)}</span>
+            <strong>${escapeHtml(data.part_name || data.part_code || '-')}</strong>
           </td>
-          <td style="text-align: center; font-variant-numeric: tabular-nums;">${formatNumber(data.target_qty)}</td>
-          <td style="text-align: center; font-variant-numeric: tabular-nums;">
-            <strong style="color: #059669;">${formatNumber(data.ok_qty)}</strong>
-          </td>
-          <td style="text-align: center; font-variant-numeric: tabular-nums;">${rejCell}</td>
-          <td style="white-space: nowrap;">
-            <span style="font-weight: 600; color: #1e293b;">${escapeHtml(data.operator_name || '-')}</span>
-            ${recByHtml}
+          <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; color: #1e293b;">
+            ${formatNumber(data.target_qty)} <span style="font-size: 0.76rem; color: #64748b; font-weight: 500;">${escapeHtml(data.uom || 'PCS')}</span>
           </td>
           <td style="text-align: center;">
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; min-width: 110px;">
+            <div style="display: flex; gap: 4px; justify-content: center;">
               <button type="button" class="btn-view" title="View Details">View</button>
               <button type="button" class="btn-print" title="Print Production Slip">Print</button>
-              <button type="button" class="btn-edit" title="Edit Entry">Edit</button>
+              <a href="production-add.php?id=${encodeURIComponent(data.id)}" class="btn-edit" title="Edit Entry" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">Edit</a>
               <button type="button" class="btn-delete" title="Delete Entry">Delete</button>
             </div>
           </td>
         `;
       }
 
-      // Submit Form (Add / Edit via API to Database)
-      prdForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-
-        const id = editPrdId.value;
-        const mipNo = (document.getElementById('scanMipInput') ? document.getElementById('scanMipInput').value.trim() : '');
-        const shift = document.getElementById('inputShift').value;
-        const workOrder = document.getElementById('inputWorkOrder').value.trim();
-        const partSelect = document.getElementById('inputPartSelect');
-        const partCode = (document.getElementById('inputPartCode') ? document.getElementById('inputPartCode').value.trim() : '') ||
-                         (partSelect ? partSelect.value.trim() : '');
-        const partName = (document.getElementById('inputPartName') ? document.getElementById('inputPartName').value.trim() : '') ||
-                         (partSelect ? (partSelect.getAttribute('data-name') || '') : '') ||
-                         (partsCatalog[partCode] ? partsCatalog[partCode].part_name : partCode);
-        const department = (document.getElementById('inputDepartment') ? document.getElementById('inputDepartment').value.trim() : '');
-        const receivedBy = (document.getElementById('inputReceivedBy') ? document.getElementById('inputReceivedBy').value.trim() : '');
-        const processName = document.getElementById('inputProcess').value;
-        const targetQty = parseFloat(document.getElementById('inputTargetQty').value || 0);
-        const okQty = parseFloat(document.getElementById('inputOkQty').value || 0);
-        const rejectedQty = parseFloat(document.getElementById('inputRejectedQty').value || 0);
-        const operatorName = document.getElementById('inputOperator').value.trim();
-        const uom = document.getElementById('inputUom').value || 'PCS';
-        const status = document.getElementById('inputStatus').value || 'Completed';
-
-        if (!partCode) {
-          showToast('Please scan an MIP slip to load part details.', 'error');
-          return;
-        }
-        if (!processName) {
-          showToast('Please select a Process / Stage.', 'error');
-          return;
-        }
-        if (!shift) {
-          showToast('Please select a Shift.', 'error');
-          return;
-        }
-        if (!operatorName) {
-          showToast('Please enter Operator / Technician name.', 'error');
-          return;
-        }
-
-        const payload = {
-          action: id ? 'update' : 'create',
-          id: id,
-          mip_no: mipNo,
-          work_order: workOrder,
-          part_code: partCode,
-          part_name: partName,
-          department: department,
-          received_by: receivedBy,
-          process_name: processName,
-          shift: shift,
-          target_qty: targetQty,
-          ok_qty: okQty,
-          rejected_qty: rejectedQty,
-          operator_name: operatorName,
-          uom: uom,
-          status: status
-        };
-
-        const submitBtn = document.getElementById('savePrdSubmitBtn');
-        const origText = submitBtn.textContent;
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Saving...';
-
-        try {
-          const res = await fetch('api/production.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-          const resJson = await res.json();
-
-          if (!resJson.success) {
-            showToast(resJson.message || 'Failed to save production entry', 'error');
-            submitBtn.disabled = false;
-            submitBtn.textContent = origText;
-            return;
-          }
-
-          const savedData = resJson.data;
-
-          if (id) {
-            // Edit existing row
-            const row = prdTableBody.querySelector(`tr[data-id="${id}"]`);
-            if (row) {
-              populateRow(row, savedData);
-              showToast('Production entry updated successfully in database!', 'success');
-            }
-          } else {
-            // Add new row
-            const emptyRow = document.getElementById('emptyTableRow');
-            if (emptyRow) emptyRow.remove();
-
-            const tr = document.createElement('tr');
-            populateRow(tr, savedData);
-            prdTableBody.insertBefore(tr, prdTableBody.firstChild);
-            showToast('Production entry logged & stored in database!', 'success');
-          }
-
-          reindexRows();
-          updateCounters();
-          closeModal();
-        } catch (err) {
-          showToast('Network error while saving production entry.', 'error');
-        } finally {
-          submitBtn.disabled = false;
-          submitBtn.textContent = origText;
-        }
-      });
-
       // View Modal
       function getRowData(row) {
         return {
           id: row.getAttribute('data-id') || '',
           mipNo: row.getAttribute('data-mip_no') || '',
-          shift: row.getAttribute('data-shift') || '',
+          customerName: row.getAttribute('data-customer_name') || '',
+          customerCode: row.getAttribute('data-customer_code') || '',
+          soNumber: row.getAttribute('data-so_number') || '',
           partCode: row.getAttribute('data-part_code') || '',
           partName: row.getAttribute('data-part_name') || '',
           processName: row.getAttribute('data-process_name') || '',
@@ -1782,10 +1099,6 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
           createDateEl.textContent = data.createdAt ? formatDateDMY(data.createdAt) : formatDateDMY(new Date().toISOString());
         }
 
-        const shiftTag = document.getElementById('vShift');
-        shiftTag.className = `shift-tag ${getShiftClass(data.shift)}`;
-        shiftTag.textContent = data.shift;
-
         const statusTag = data.status === 'Completed'
           ? '<span class="tag tag-completed">Completed</span>'
           : (data.status === 'In Progress' 
@@ -1794,13 +1107,13 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
         document.getElementById('vStatusTag').innerHTML = statusTag;
 
         document.getElementById('vPartDesc').textContent = `${data.partCode} - ${data.partName}`;
-        document.getElementById('vWorkOrder').textContent = `${data.mipNo ? data.mipNo + ' / ' : ''}${data.workOrder || '-'}`;
+        document.getElementById('vWorkOrder').textContent = `${data.mipNo ? data.mipNo : '-'}${data.soNumber ? ' (SO: ' + data.soNumber + ')' : (data.workOrder ? ' (' + data.workOrder + ')' : '')}`;
+        if (document.getElementById('vCustomer')) {
+          document.getElementById('vCustomer').textContent = data.customerName || '-';
+        }
         document.getElementById('vProcessMachine').textContent = data.processName;
         document.getElementById('vPersonnel').textContent = data.operatorName || '-';
 
-        if (document.getElementById('vDepartment')) {
-          document.getElementById('vDepartment').textContent = data.department || '-';
-        }
         if (document.getElementById('vReceivedBy')) {
           document.getElementById('vReceivedBy').textContent = data.receivedBy || '-';
         }
@@ -2084,7 +1397,7 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
               </div>
               <div class="slip-badge">
                 <div class="slip-no">ENTRY ID: #${escapeHtml(data.id || '-')}</div>
-                <div class="slip-date">Date: <strong>${escapeHtml(data.createdAt ? formatDateDMY(data.createdAt) : formatDateDMY(new Date().toISOString()))}</strong> &nbsp;|&nbsp; Shift: ${escapeHtml(data.shift)}</div>
+                <div class="slip-date">Date: <strong>${escapeHtml(data.createdAt ? formatDateDMY(data.createdAt) : formatDateDMY(new Date().toISOString()))}</strong></div>
               </div>
             </div>
 
@@ -2104,20 +1417,18 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
                     </div>
                   </div>` : `<strong>-</strong>`}
                 </td>
-                <td class="lbl">Work Order No:</td>
-                <td class="val"><strong>${escapeHtml(data.workOrder || '-')}</strong></td>
+                <td class="lbl">SO Number:</td>
+                <td class="val"><strong>${escapeHtml(data.soNumber || data.workOrder || '-')}</strong></td>
               </tr>
               <tr>
                 <td class="lbl">Stage / Process:</td>
                 <td class="val"><strong>${escapeHtml(data.processName)}</strong></td>
-                <td class="lbl">Production Shift:</td>
-                <td class="val">${escapeHtml(data.shift)}</td>
+                <td class="lbl">Customer:</td>
+                <td class="val"><strong>${escapeHtml(data.customerName || '-')}</strong></td>
               </tr>
               <tr>
-                <td class="lbl">Floor / Department:</td>
-                <td class="val">${escapeHtml(data.department || '-')}</td>
                 <td class="lbl">Material Received By:</td>
-                <td class="val"><strong>${escapeHtml(data.receivedBy || '-')}</strong></td>
+                <td class="val" colspan="3"><strong>${escapeHtml(data.receivedBy || '-')}</strong></td>
               </tr>
               <tr>
                 <td class="lbl">Create Date:</td>
@@ -2233,66 +1544,7 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
           return;
         }
 
-        // Edit
-        if (e.target.classList.contains('btn-edit')) {
-          editPrdId.value = row.getAttribute('data-id');
-          const shiftVal = row.getAttribute('data-shift') || '';
-          const shiftEl = document.getElementById('inputShift');
-          shiftEl.value = '';
-          for (let i = 0; i < shiftEl.options.length; i++) {
-            if (shiftEl.options[i].value && (shiftVal.includes(shiftEl.options[i].value) || shiftEl.options[i].value === shiftVal)) {
-              shiftEl.selectedIndex = i;
-              break;
-            }
-          }
-          const mipNoVal = row.getAttribute('data-mip_no') || '';
-          if (scanMipInput) scanMipInput.value = mipNoVal;
-          document.getElementById('inputWorkOrder').value = row.getAttribute('data-work_order') || '';
-          const pCode = row.getAttribute('data-part_code') || '';
-          const pName = row.getAttribute('data-part_name') || '';
-          if (document.getElementById('inputPartSelect')) {
-            document.getElementById('inputPartSelect').value = pCode;
-            document.getElementById('inputPartSelect').setAttribute('data-name', pName);
-          }
-          if (document.getElementById('inputPartCode')) document.getElementById('inputPartCode').value = pCode;
-          if (document.getElementById('inputPartName')) document.getElementById('inputPartName').value = pName;
-          if (document.getElementById('inputDepartment')) document.getElementById('inputDepartment').value = row.getAttribute('data-department') || '';
-          if (document.getElementById('inputReceivedBy')) document.getElementById('inputReceivedBy').value = row.getAttribute('data-received_by') || '';
-          document.getElementById('inputProcess').value = row.getAttribute('data-process_name') || '';
-          document.getElementById('inputOperator').value = row.getAttribute('data-operator_name') || '';
-          document.getElementById('inputTargetQty').value = row.getAttribute('data-target_qty') || '';
-          document.getElementById('inputOkQty').value = row.getAttribute('data-ok_qty') || '';
-          document.getElementById('inputRejectedQty').value = row.getAttribute('data-rejected_qty') || '0';
-          document.getElementById('inputUom').value = row.getAttribute('data-uom') || 'PCS';
-          document.getElementById('inputStatus').value = row.getAttribute('data-status') || 'Completed';
 
-          if (mipNoVal) {
-            const tblWrap = document.getElementById('fetchedMipTableWrap');
-            const elNo = document.getElementById('tblMipNo');
-            const elWo = document.getElementById('tblMipWo');
-            const elPart = document.getElementById('tblMipPart');
-            const elQty = document.getElementById('tblMipQty');
-            const elDept = document.getElementById('tblMipDept');
-            const elReceivedBy = document.getElementById('tblMipReceivedBy');
-            const elDate = document.getElementById('tblMipDate');
-
-            if (elNo) elNo.textContent = mipNoVal;
-            if (elWo) elWo.textContent = row.getAttribute('data-work_order') || '-';
-            if (elPart) elPart.textContent = `${pCode} - ${pName}`;
-            if (elQty) elQty.textContent = `${row.getAttribute('data-target_qty') || 0} ${row.getAttribute('data-uom') || 'PCS'}`;
-            if (elDept) elDept.textContent = row.getAttribute('data-department') || '-';
-            if (elReceivedBy) elReceivedBy.textContent = row.getAttribute('data-received_by') || '-';
-            if (elDate) elDate.textContent = '-';
-
-            const match = availableMips.find(m => m.issue_no === mipNoVal) || { part_code: pCode, issued_qty: row.getAttribute('data-target_qty') };
-            renderChildParts(match, row.getAttribute('data-target_qty'));
-            if (tblWrap) tblWrap.style.display = 'block';
-          }
-
-          updateLiveYieldCalculation();
-          openModal('Edit Production Entry (ID #' + row.getAttribute('data-id') + ')');
-          return;
-        }
 
         // Delete
         if (e.target.classList.contains('btn-delete')) {
@@ -2335,7 +1587,7 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
             if (remainingRows.length === 0) {
               prdTableBody.innerHTML = `
                 <tr id="emptyTableRow">
-                  <td colspan="11" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
+                  <td colspan="7" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
                     No production entries found. Click <strong>+ Log Production</strong> to record shop-floor output.
                   </td>
                 </tr>

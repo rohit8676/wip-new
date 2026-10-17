@@ -439,13 +439,16 @@ try {
         CREATE TABLE production_entry (
             id INT IDENTITY(1,1) PRIMARY KEY,
             mip_no NVARCHAR(50) NULL,
+            customer_name NVARCHAR(150) NULL,
+            customer_code NVARCHAR(50) NULL,
+            so_number NVARCHAR(100) NULL,
             work_order NVARCHAR(100) NULL,
             part_code NVARCHAR(50) NOT NULL,
             part_name NVARCHAR(150) NOT NULL,
             department NVARCHAR(100) NULL,
             received_by NVARCHAR(150) NULL,
             process_name NVARCHAR(100) NOT NULL,
-            shift NVARCHAR(50) NOT NULL,
+            shift NVARCHAR(50) NULL,
             target_qty DECIMAL(18, 3) NOT NULL,
             ok_qty DECIMAL(18, 3) NOT NULL,
             rework_qty DECIMAL(18, 3) DEFAULT 0,
@@ -456,6 +459,25 @@ try {
             created_at DATETIME DEFAULT GETDATE(),
             updated_at DATETIME DEFAULT GETDATE()
         );
+    END
+    ELSE
+    BEGIN
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='production_entry' AND COLUMN_NAME='customer_name')
+        BEGIN
+            ALTER TABLE production_entry ADD customer_name NVARCHAR(150) NULL;
+        END
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='production_entry' AND COLUMN_NAME='customer_code')
+        BEGIN
+            ALTER TABLE production_entry ADD customer_code NVARCHAR(50) NULL;
+        END
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='production_entry' AND COLUMN_NAME='so_number')
+        BEGIN
+            ALTER TABLE production_entry ADD so_number NVARCHAR(100) NULL;
+        END
+        IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='production_entry' AND COLUMN_NAME='shift' AND IS_NULLABLE='NO')
+        BEGIN
+            ALTER TABLE production_entry ALTER COLUMN shift NVARCHAR(50) NULL;
+        END
     END
     ";
     $pdoApp->exec($createPrdTableSql);

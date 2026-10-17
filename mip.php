@@ -548,9 +548,8 @@ $pageTitle = 'Material Issue for Production (MIP)';
               <thead>
                 <tr>
                   <th style="width: 50px; text-align: center;">Sr No.</th>
-                  <th style="width: 140px;">Issue No. & Date</th>
                   <th>Customer</th>
-                  <th style="width: 120px;">SO Number</th>
+                  <th style="width: 140px;">Issue No. & Date</th>
                   <th>Part Description</th>
                   <th style="width: 100px;">Issued Qty</th>
                   <th style="width: 65px;">UOM</th>
@@ -561,7 +560,7 @@ $pageTitle = 'Material Issue for Production (MIP)';
               <tbody id="mipTableBody">
                 <?php if (empty($mipList)): ?>
                   <tr id="emptyTableRow">
-                    <td colspan="9" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
+                    <td colspan="8" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
                       No Material Issue records found in database. Click <strong>+ Issue Material</strong> to create your first production issue slip.
                     </td>
                   </tr>
@@ -583,17 +582,14 @@ $pageTitle = 'Material Issue for Production (MIP)';
                         data-child_parts_details="<?php echo htmlspecialchars($item['child_parts_details'] ?? ''); ?>">
                       <td style="color: var(--text-sub); font-weight: 600; text-align: center;"><?php echo $sr++; ?></td>
                       <td>
-                        <strong><?php echo htmlspecialchars($item['issue_no']); ?></strong>
-                        <span class="sub-meta"><?php echo htmlspecialchars(formatDateDMY($item['issue_date'])); ?></span>
-                      </td>
-                      <td>
                         <strong><?php echo htmlspecialchars(!empty($item['customer_name']) ? $item['customer_name'] : '-'); ?></strong>
                         <?php if (!empty($item['customer_code'])): ?>
                           <span class="sub-meta"><?php echo htmlspecialchars($item['customer_code']); ?></span>
                         <?php endif; ?>
                       </td>
                       <td>
-                        <strong style="color: #2563eb;"><?php echo htmlspecialchars(!empty($item['so_number']) ? $item['so_number'] : '-'); ?></strong>
+                        <strong><?php echo htmlspecialchars($item['issue_no']); ?></strong>
+                        <span class="sub-meta"><?php echo htmlspecialchars(formatDateDMY($item['issue_date'])); ?></span>
                       </td>
                       <td>
                         <strong><?php echo htmlspecialchars($item['part_code']); ?></strong> - <?php echo htmlspecialchars($item['part_name']); ?>
@@ -674,8 +670,8 @@ $pageTitle = 'Material Issue for Production (MIP)';
               </div>
 
               <div class="form-group">
-                <label for="inputSoNumber">SO Number *</label>
-                <input type="text" id="inputSoNumber" class="form-control" placeholder="e.g., SO-1001" required>
+                <label for="inputSoNumber">SO Number</label>
+                <input type="text" id="inputSoNumber" class="form-control" placeholder="e.g., SO-1001 (optional)">
               </div>
 
               <div class="form-group">
@@ -988,15 +984,12 @@ $pageTitle = 'Material Issue for Production (MIP)';
       tr.innerHTML = `
         <td style="color: var(--text-sub); font-weight: 600; text-align: center;">1</td>
         <td>
-          <strong>${escapeHtml(item.issue_no)}</strong>
-          <span class="sub-meta">${formatDateDMY(item.issue_date)}</span>
-        </td>
-        <td>
           <strong>${escapeHtml(item.customer_name || '-')}</strong>
           ${item.customer_code ? `<span class="sub-meta">${escapeHtml(item.customer_code)}</span>` : ''}
         </td>
         <td>
-          <strong style="color: #2563eb;">${escapeHtml(item.so_number || '-')}</strong>
+          <strong>${escapeHtml(item.issue_no)}</strong>
+          <span class="sub-meta">${formatDateDMY(item.issue_date)}</span>
         </td>
         <td>
           <strong>${escapeHtml(item.part_code)}</strong> - ${escapeHtml(item.part_name)}
@@ -1356,11 +1349,7 @@ $pageTitle = 'Material Issue for Production (MIP)';
           inputCustomerSelect.focus();
           return;
         }
-        if (!soNumber) {
-          showToast('SO Number is required.', 'error');
-          inputSoNumber.focus();
-          return;
-        }
+
         if (!partCode) {
           showToast('Please select a Part.', 'error');
           inputPartSelect.focus();
@@ -2005,7 +1994,7 @@ $pageTitle = 'Material Issue for Production (MIP)';
           if (remainingRows.length === 0) {
             mipTableBody.innerHTML = `
               <tr id="emptyTableRow">
-                <td colspan="9" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
+                <td colspan="8" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
                   No Material Issue records found in database. Click <strong>+ Issue Material</strong> to create your first production issue slip.
                 </td>
               </tr>

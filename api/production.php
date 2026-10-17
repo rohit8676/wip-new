@@ -27,7 +27,7 @@ if ($method === 'GET') {
     requirePermission('production', 'read');
     try {
         $stmt = $pdo->query("
-            SELECT id, mip_no, work_order, part_code, part_name,
+            SELECT id, mip_no, customer_name, customer_code, so_number, work_order, part_code, part_name,
                    department, received_by, process_name, shift,
                    target_qty, ok_qty, rejected_qty,
                    operator_name, uom, status,
@@ -93,34 +93,32 @@ if ($method === 'POST') {
     // -------------------------------------------------------------
     $id = intval($data['id'] ?? 0);
     $mipNo = trim($data['mip_no'] ?? '');
+    $customerName = trim($data['customer_name'] ?? '');
+    $customerCode = trim($data['customer_code'] ?? '');
+    $soNumber = trim($data['so_number'] ?? '');
     $workOrder = trim($data['work_order'] ?? '');
     $partCode = trim($data['part_code'] ?? '');
     $partName = trim($data['part_name'] ?? '');
     $department = trim($data['department'] ?? '');
     $receivedBy = trim($data['received_by'] ?? '');
     $processName = trim($data['process_name'] ?? '');
-    $shift = trim($data['shift'] ?? '');
+    if (empty($processName)) {
+        $processName = 'New Line up';
+    }
     $targetQty = floatval($data['target_qty'] ?? 0);
     $okQty = floatval($data['ok_qty'] ?? 0);
     $rejectedQty = floatval($data['rejected_qty'] ?? 0);
     $operatorName = trim($data['operator_name'] ?? '');
     $uom = trim($data['uom'] ?? 'PCS');
-    $status = trim($data['status'] ?? 'Completed');
+    $status = trim($data['status'] ?? '');
+    if (empty($status)) {
+        $status = 'New Line up';
+    }
 
     // Validation
     if (empty($partCode)) {
         http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'Part details are required. Please scan an MIP slip.']);
-        exit;
-    }
-    if (empty($processName)) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'Please select a Process / Stage.']);
-        exit;
-    }
-    if (empty($shift)) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'Please select a Shift.']);
+        echo json_encode(['success' => false, 'message' => 'Part details are required. Please select a Part.']);
         exit;
     }
     if (empty($operatorName)) {
@@ -134,6 +132,42 @@ if ($method === 'POST') {
         exit;
     }
 
+    // Duplicate Validation: same MIP slip and Part cannot be saved more than once
+    if (!empty($mipNo)) {
+        if ($action === 'create' || ($action === 'update' && $id <= 0)) {
+            $dupStmt = $pdo->prepare("
+                SELECT id FROM production_entry 
+                WHERE LOWER(LTRIM(RTRIM(mip_no))) = LOWER(LTRIM(RTRIM(?))) 
+                  AND LOWER(LTRIM(RTRIM(part_code))) = LOWER(LTRIM(RTRIM(?)))
+            ");
+            $dupStmt->execute([$mipNo, $partCode]);
+            if ($dupStmt->fetch()) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false, 
+                    'message' => "Production entry for MIP slip '{$mipNo}' (Part: {$partCode}) has already been saved. It cannot be saved again."
+                ]);
+                exit;
+            }
+        } else if ($action === 'update' && $id > 0) {
+            $dupStmt = $pdo->prepare("
+                SELECT id FROM production_entry 
+                WHERE LOWER(LTRIM(RTRIM(mip_no))) = LOWER(LTRIM(RTRIM(?))) 
+                  AND LOWER(LTRIM(RTRIM(part_code))) = LOWER(LTRIM(RTRIM(?)))
+                  AND id != ?
+            ");
+            $dupStmt->execute([$mipNo, $partCode, $id]);
+            if ($dupStmt->fetch()) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false, 
+                    'message' => "Another production entry for MIP slip '{$mipNo}' (Part: {$partCode}) already exists. Duplicate entries are not allowed."
+                ]);
+                exit;
+            }
+        }
+    }
+
     if ($action === 'update' && $id > 0) {
         // UPDATE EXISTING ENTRY
         requirePermission('production', 'update');
@@ -141,13 +175,15 @@ if ($method === 'POST') {
             $updateSql = "
                 UPDATE production_entry SET
                     mip_no = ?,
+                    customer_name = ?,
+                    customer_code = ?,
+                    so_number = ?,
                     work_order = ?,
                     part_code = ?,
                     part_name = ?,
                     department = ?,
                     received_by = ?,
                     process_name = ?,
-                    shift = ?,
                     target_qty = ?,
                     ok_qty = ?,
                     rejected_qty = ?,
@@ -160,13 +196,15 @@ if ($method === 'POST') {
             $upStmt = $pdo->prepare($updateSql);
             $upStmt->execute([
                 $mipNo,
+                $customerName,
+                $customerCode,
+                $soNumber,
                 $workOrder,
                 $partCode,
                 $partName,
                 $department,
                 $receivedBy,
                 $processName,
-                $shift,
                 $targetQty,
                 $okQty,
                 $rejectedQty,
@@ -182,13 +220,15 @@ if ($method === 'POST') {
                 'data' => [
                     'id' => $id,
                     'mip_no' => $mipNo,
+                    'customer_name' => $customerName,
+                    'customer_code' => $customerCode,
+                    'so_number' => $soNumber,
                     'work_order' => $workOrder,
                     'part_code' => $partCode,
                     'part_name' => $partName,
                     'department' => $department,
                     'received_by' => $receivedBy,
                     'process_name' => $processName,
-                    'shift' => $shift,
                     'target_qty' => $targetQty,
                     'ok_qty' => $okQty,
                     'rejected_qty' => $rejectedQty,
@@ -209,13 +249,13 @@ if ($method === 'POST') {
         try {
             $insertSql = "
                 INSERT INTO production_entry (
-                    mip_no, work_order, part_code, part_name,
-                    department, received_by, process_name, shift,
+                    mip_no, customer_name, customer_code, so_number, work_order, part_code, part_name,
+                    department, received_by, process_name,
                     target_qty, ok_qty, rejected_qty,
                     operator_name, uom, status, created_at, updated_at
                 ) VALUES (
-                    ?, ?, ?, ?,
-                    ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?,
                     ?, ?, ?,
                     ?, ?, ?, GETDATE(), GETDATE()
                 )
@@ -223,13 +263,15 @@ if ($method === 'POST') {
             $inStmt = $pdo->prepare($insertSql);
             $inStmt->execute([
                 $mipNo,
+                $customerName,
+                $customerCode,
+                $soNumber,
                 $workOrder,
                 $partCode,
                 $partName,
                 $department,
                 $receivedBy,
                 $processName,
-                $shift,
                 $targetQty,
                 $okQty,
                 $rejectedQty,
@@ -246,13 +288,15 @@ if ($method === 'POST') {
                 'data' => [
                     'id' => $newId,
                     'mip_no' => $mipNo,
+                    'customer_name' => $customerName,
+                    'customer_code' => $customerCode,
+                    'so_number' => $soNumber,
                     'work_order' => $workOrder,
                     'part_code' => $partCode,
                     'part_name' => $partName,
                     'department' => $department,
                     'received_by' => $receivedBy,
                     'process_name' => $processName,
-                    'shift' => $shift,
                     'target_qty' => $targetQty,
                     'ok_qty' => $okQty,
                     'rejected_qty' => $rejectedQty,
