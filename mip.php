@@ -1986,6 +1986,24 @@ $pageTitle = 'Material Issue for Production (MIP)';
             throw new Error(result.message || 'Delete failed.');
           }
 
+          const deletedIssueNo = result.deleted_issue_no || pendingDeleteRow?.getAttribute('data-issue_no');
+          if (deletedIssueNo) {
+            try {
+              localStorage.removeItem(`wip_wf_${encodeURIComponent(deletedIssueNo)}`);
+              localStorage.removeItem(`wip_wf_${deletedIssueNo}`);
+              Object.keys(localStorage).forEach(k => {
+                if (k.startsWith('wip_wf_') && (k.includes(encodeURIComponent(deletedIssueNo)) || k.includes(deletedIssueNo))) {
+                  localStorage.removeItem(k);
+                }
+              });
+              Object.keys(sessionStorage).forEach(k => {
+                if (k.startsWith('wip_run_logs_') && (k.includes(encodeURIComponent(deletedIssueNo)) || k.includes(deletedIssueNo))) {
+                  sessionStorage.removeItem(k);
+                }
+              });
+            } catch (e) {}
+          }
+
           if (pendingDeleteRow) {
             pendingDeleteRow.remove();
           }

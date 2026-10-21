@@ -40,10 +40,10 @@ $yesterdaySqlDate = date('Y-m-d', strtotime('-1 day'));
 
 if ($pdo) {
     try {
-        $stmtParts = $pdo->query("SELECT id, part_code, part_name, child_parts, processes FROM part_master WHERE status = 'Active' ORDER BY part_code ASC");
+        $stmtParts = $pdo->query("SELECT id, part_code, part_name, child_parts, processes, output_variants FROM part_master WHERE status = 'Active' ORDER BY part_code ASC");
         $partList = $stmtParts->fetchAll(PDO::FETCH_ASSOC);
 
-        $stmtProc = $pdo->query("SELECT id, process_code, process_name FROM process_master WHERE status = 'Active' ORDER BY process_name ASC");
+        $stmtProc = $pdo->query("SELECT id, process_code, process_name, remarks FROM process_master WHERE status = 'Active' ORDER BY id ASC");
         $processList = $stmtProc->fetchAll(PDO::FETCH_ASSOC);
 
         $stmtCust = $pdo->query("SELECT id, customer_code, customer_name FROM customer_master WHERE status = 'Active' ORDER BY customer_name ASC");
@@ -219,6 +219,47 @@ $totalInspected = $totalProducedOk + $totalRejections;
 $yieldRate = $totalInspected > 0 ? round(($totalProducedOk / $totalInspected) * 100, 1) : 100.0;
 
 $pageTitle = 'Production Entry / Daily Production Report (DPR)';
+
+$partsByCode = [];
+foreach ($partList as $p) {
+    $partsByCode[$p['part_code']] = $p;
+}
+
+if (!function_exists('getPartProcessesList')) {
+    function getPartProcessesList($partCode, $partsByCode, $processList) {
+        if (isset($partsByCode[$partCode]) && !empty($partsByCode[$partCode]['processes'])) {
+            $pArr = json_decode($partsByCode[$partCode]['processes'], true);
+            if (is_array($pArr) && count($pArr) > 0) {
+                $res = [];
+                foreach ($pArr as $idx => $p) {
+                    if (is_array($p)) {
+                        $res[] = [
+                            'code' => $p['code'] ?? str_pad($idx + 1, 3, '0', STR_PAD_LEFT),
+                            'name' => $p['name'] ?? ('Stage ' . ($idx + 1)),
+                            'remarks' => $p['remarks'] ?? ''
+                        ];
+                    } elseif (is_string($p) && trim($p) !== '') {
+                        $res[] = [
+                            'code' => str_pad($idx + 1, 3, '0', STR_PAD_LEFT),
+                            'name' => trim($p),
+                            'remarks' => ''
+                        ];
+                    }
+                }
+                if (count($res) > 0) return $res;
+            }
+        }
+        $res = [];
+        foreach ($processList as $idx => $pm) {
+            $res[] = [
+                'code' => $pm['process_code'] ?? str_pad($idx + 1, 3, '0', STR_PAD_LEFT),
+                'name' => $pm['process_name'] ?? ('Stage ' . ($idx + 1)),
+                'remarks' => $pm['remarks'] ?? ''
+            ];
+        }
+        return $res;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -600,6 +641,541 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
       background: #f1f5f9;
       color: var(--text-main);
     }
+
+    /* Dynamic Process Action Button & Floating Menu */
+    .btn-process-menu {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 9px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
+      border-radius: 4px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    .btn-process-menu:hover, .btn-process-menu.active {
+      background: #2563eb;
+      color: #ffffff;
+      border-color: #2563eb;
+    }
+    .floating-process-menu {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.08);
+      min-width: 170px;
+      padding: 4px 0;
+      font-family: inherit;
+      animation: menuFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes menuFadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .fpm-list {
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .fpm-item {
+      display: block;
+      padding: 8px 14px;
+      text-decoration: none;
+      color: #334155;
+      font-size: 0.84rem;
+      font-weight: 500;
+      line-height: 1.4;
+      transition: background 0.12s ease, color 0.12s ease;
+      white-space: nowrap;
+    }
+    .fpm-item:hover {
+      background: #f1f5f9;
+      color: #2563eb;
+    }
+
+    /* =========================================================
+       Left Slide-in Process Workflow Drawer / Slider (Half Screen)
+       ========================================================= */
+    .slider-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.48);
+      backdrop-filter: blur(4px);
+      z-index: 99990;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      display: none;
+    }
+    .slider-overlay.active {
+      opacity: 1 !important;
+      pointer-events: auto !important;
+      display: block !important;
+    }
+
+    .slider-drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 50vw;
+      min-width: 460px;
+      max-width: 760px;
+      height: 100vh;
+      background: #ffffff;
+      z-index: 99995;
+      box-shadow: -20px 0 50px rgba(15, 23, 42, 0.25);
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      overflow: hidden;
+      visibility: hidden;
+    }
+    .slider-drawer.active {
+      transform: translateX(0) !important;
+      visibility: visible !important;
+    }
+
+    @media (max-width: 768px) {
+      .slider-drawer {
+        width: 92vw;
+        min-width: unset;
+      }
+    }
+
+    /* Slider Header (Clean White, 3 KPI Cards Only) */
+    .slider-header {
+      background: #ffffff;
+      color: #0f172a;
+      padding: 14px 18px;
+      flex-shrink: 0;
+      position: relative;
+      border-bottom: 1px solid #e2e8f0;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    }
+    .slider-header-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .slider-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      flex: 1;
+    }
+    .slider-stat-card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      transition: all 0.15s ease;
+    }
+    .slider-stat-card:hover {
+      background: #ffffff;
+      border-color: #cbd5e1;
+      box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+    }
+    .slider-stat-card.stat-card-target {
+      border-left: 3px solid #2563eb;
+    }
+    .slider-stat-card.stat-card-fg {
+      border-left: 3px solid #16a34a;
+      background: linear-gradient(180deg, #ffffff 0%, #f0fdf4 100%);
+    }
+    .slider-stat-card.stat-card-rej {
+      border-left: 3px solid #dc2626;
+      background: linear-gradient(180deg, #ffffff 0%, #fef2f2 100%);
+    }
+    .slider-stat-lbl {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #64748b;
+    }
+    .slider-stat-val {
+      font-size: 1.05rem;
+      font-weight: 800;
+      color: #0f172a;
+      margin-top: 2px;
+      letter-spacing: -0.01em;
+    }
+    .slider-stat-val.val-fg {
+      color: #16a34a;
+    }
+    .slider-stat-val.val-rej {
+      color: #dc2626;
+    }
+    .slider-close-btn {
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      color: #64748b;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      flex-shrink: 0;
+    }
+    .slider-close-btn:hover {
+      background: #e2e8f0;
+      color: #0f172a;
+      transform: scale(1.05);
+    }
+
+    /* Slider Body & Vertical Line Timeline */
+    .slider-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 22px;
+      background: #f8fafc;
+      position: relative;
+    }
+
+    /* Vertical Timeline Track Line */
+    .timeline-wrap {
+      position: relative;
+      padding-left: 10px;
+    }
+    .timeline-track-line {
+      position: absolute;
+      left: 27px;
+      top: 18px;
+      bottom: 24px;
+      width: 3px;
+      background: #cbd5e1;
+      border-radius: 3px;
+      z-index: 1;
+    }
+
+    /* Timeline Step Item */
+    .timeline-step {
+      display: flex;
+      gap: 16px;
+      position: relative;
+      margin-bottom: 22px;
+      z-index: 2;
+    }
+    .timeline-step:last-child {
+      margin-bottom: 6px;
+    }
+
+    /* Step Node on the Vertical Line */
+    .step-node {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 0.84rem;
+      flex-shrink: 0;
+      background: #ffffff;
+      border: 2px solid #94a3b8;
+      color: #64748b;
+      box-shadow: 0 0 0 4px #f8fafc, 0 1px 3px rgba(0, 0, 0, 0.08);
+      transition: all 0.2s ease;
+    }
+    .step-node.completed {
+      background: #10b981;
+      border-color: #059669;
+      color: #ffffff;
+      box-shadow: 0 0 0 4px #f8fafc, 0 2px 6px rgba(16, 185, 129, 0.35);
+    }
+    .step-node.in-progress {
+      background: #2563eb;
+      border-color: #1d4ed8;
+      color: #ffffff;
+      box-shadow: 0 0 0 4px #f8fafc, 0 0 0 7px rgba(37, 99, 235, 0.2);
+    }
+    .step-node.ready {
+      background: #ffffff;
+      border-color: #3b82f6;
+      color: #2563eb;
+    }
+
+    /* Step Content Card */
+    .step-card {
+      flex: 1;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 9px;
+      padding: 13px 15px;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 2px 6px rgba(15, 23, 42, 0.02);
+      transition: all 0.15s ease;
+    }
+    .step-card:hover {
+      border-color: #cbd5e1;
+      transform: translateX(2px);
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+    }
+    .step-card.active-stage {
+      border-color: #93c5fd;
+      background: linear-gradient(180deg, #ffffff 0%, #f0f7ff 100%);
+    }
+
+    /* Step Card Header */
+    .step-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .step-proc-name {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #0f172a;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .step-proc-order {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: #64748b;
+      background: #f1f5f9;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+
+    .step-status-tag {
+      font-size: 0.70rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 3px 8px;
+      border-radius: 4px;
+    }
+    .step-status-completed {
+      background: #dcfce7;
+      color: #15803d;
+      border: 1px solid #bbf7d0;
+    }
+    .step-status-in-progress {
+      background: #dbeafe;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
+    }
+    .step-status-ready {
+      background: #fef3c7;
+      color: #b45309;
+      border: 1px solid #fde68a;
+    }
+    .step-status-waiting {
+      background: #f1f5f9;
+      color: #64748b;
+      border: 1px solid #e2e8f0;
+    }
+
+    /* Simple Stage Breakdown (Clean, Non-congested) */
+    .simple-breakdown-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 8px 0;
+    }
+    .simple-stat-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.80rem;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      color: #334155;
+    }
+    .simple-stat-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .simple-stat-label {
+      font-weight: 500;
+      color: #64748b;
+      font-size: 0.76rem;
+    }
+    .simple-stat-pct {
+      font-weight: 800;
+      font-size: 0.74rem;
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin-left: 2px;
+    }
+    .simple-stat-pass {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+    }
+    .simple-stat-pass .simple-stat-pct {
+      background: #2563eb;
+      color: #ffffff;
+    }
+    .simple-stat-rej {
+      background: #faf5ff;
+      border-color: #f3e8ff;
+    }
+    .simple-stat-rej .simple-stat-pct {
+      background: #8b5cf6;
+      color: #ffffff;
+    }
+    .simple-stat-pending {
+      background: #f8fafc;
+      border-color: #e2e8f0;
+    }
+    .simple-stat-pending .simple-stat-pct {
+      background: #94a3b8;
+      color: #ffffff;
+    }
+
+    /* Sleek Multi-segment Progress Bar */
+    .simple-progress-bar {
+      display: flex;
+      height: 6px;
+      background: #f1f5f9;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 6px 0 4px 0;
+    }
+    .simple-bar-seg {
+      height: 100%;
+      transition: width 0.3s ease;
+    }
+    .simple-bar-seg.pass {
+      background: #2563eb;
+    }
+    .simple-bar-seg.rej {
+      background: #8b5cf6;
+    }
+    .simple-bar-seg.rem {
+      background: #cbd5e1;
+    }
+
+    .step-operator-meta {
+      font-size: 0.72rem;
+      color: #64748b;
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid #f1f5f9;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    /* Percentage Breakdown Pill Row */
+    .step-pct-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .pct-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 6px;
+    }
+    .pct-pill-pass {
+      background: #ecfdf5;
+      color: #059669;
+      border: 1px solid #a7f3d0;
+    }
+    .pct-pill-rej {
+      background: #fef2f2;
+      color: #dc2626;
+      border: 1px solid #fecaca;
+    }
+    .pct-pill-rem {
+      background: #f8fafc;
+      color: #64748b;
+      border: 1px solid #e2e8f0;
+    }
+
+    /* Multi-Segment Stacked Progress Bar */
+    .step-multi-bar {
+      height: 8px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      display: flex;
+      overflow: hidden;
+      margin-bottom: 9px;
+    }
+    .bar-seg-pass {
+      background: #10b981;
+      transition: width 0.3s ease;
+    }
+    .bar-seg-rej {
+      background: #ef4444;
+      transition: width 0.3s ease;
+    }
+    .bar-seg-rem {
+      background: #cbd5e1;
+      transition: width 0.3s ease;
+    }
+
+    /* Step Metrics Grid */
+    .step-metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      background: #f8fafc;
+      border: 1px solid #f1f5f9;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 0.76rem;
+    }
+    .metric-item {
+      display: flex;
+      flex-direction: column;
+    }
+    .metric-lbl {
+      color: #64748b;
+      font-size: 0.68rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .metric-val {
+      font-weight: 700;
+      color: #0f172a;
+      margin-top: 1px;
+    }
+    .metric-val.val-pass { color: #16a34a; }
+    .metric-val.val-rej { color: #dc2626; }
+
+    /* Slider Footer */
+    .slider-footer {
+      padding: 14px 22px;
+      background: #ffffff;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
@@ -660,9 +1236,8 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
               <!-- Filter by Status -->
               <select id="filterStatus" class="simple-input" style="width: auto;">
                 <option value="">All Status</option>
-                <option value="Completed">Completed</option>
-                <option value="In Progress">In Progress</option>
-                <option value="On Hold">On Hold</option>
+                <option value="Complete">Complete</option>
+                <option value="Progress">Progress</option>
               </select>
 
               <!-- + Log Production Button -->
@@ -683,13 +1258,14 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
                   <th style="white-space: nowrap;">Customer</th>
                   <th style="white-space: nowrap;">Part Name</th>
                   <th style="text-align: center; white-space: nowrap;">Target Qty</th>
+                  <th style="text-align: center; white-space: nowrap;">Status</th>
                   <th style="text-align: center; white-space: nowrap;">Action</th>
                 </tr>
               </thead>
               <tbody id="prdTableBody">
                 <?php if (empty($productionList)): ?>
                   <tr id="emptyTableRow">
-                    <td colspan="7" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
+                    <td colspan="8" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
                       No production entries found. Click <strong>+ Log Production</strong> to record shop-floor output.
                     </td>
                   </tr>
@@ -712,7 +1288,7 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
                         data-rejected_qty="<?php echo htmlspecialchars($item['rejected_qty'] ?? 0); ?>"
                         data-operator_name="<?php echo htmlspecialchars($item['operator_name']); ?>"
                         data-uom="<?php echo htmlspecialchars($item['uom'] ?? 'PCS'); ?>"
-                        data-status="<?php echo htmlspecialchars($item['status'] ?? 'Completed'); ?>"
+                        data-status="<?php echo htmlspecialchars($item['status'] ?? 'In Progress'); ?>"
                         data-created_at="<?php echo !empty($item['created_at']) ? date('Y-m-d', strtotime($item['created_at'])) : date('Y-m-d'); ?>">
                       <td style="color: var(--text-sub); font-weight: 600; text-align: center;"><?php echo $sr++; ?></td>
                       <td style="white-space: nowrap; text-align: center; font-size: 0.85rem; font-weight: 600; color: #475569;">
@@ -730,13 +1306,39 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
                       <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; color: #1e293b;">
                         <?php echo formatCleanNum($item['target_qty']); ?> <span style="font-size: 0.76rem; color: #64748b; font-weight: 500;"><?php echo htmlspecialchars($item['uom'] ?? 'PCS'); ?></span>
                       </td>
+                      <td style="text-align: center; white-space: nowrap;">
+                        <?php 
+                          $rowStatus = trim($item['status'] ?? 'In Progress');
+                          $isComplete = (strcasecmp($rowStatus, 'Completed') === 0 || strcasecmp($rowStatus, 'Complete') === 0);
+                        ?>
+                        <?php if ($isComplete): ?>
+                          <span class="tag tag-completed" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0;">
+                            <span style="width: 6px; height: 6px; border-radius: 50%; background: #16a34a;"></span>
+                            Complete
+                          </span>
+                        <?php else: ?>
+                          <span class="tag tag-in-progress" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;">
+                            <span style="width: 6px; height: 6px; border-radius: 50%; background: #2563eb;"></span>
+                            Progress
+                          </span>
+                        <?php endif; ?>
+                      </td>
+                      <?php 
+                        $itemPartCode = $item['part_code'] ?? '';
+                        $itemStages = getPartProcessesList($itemPartCode, $partsByCode, $processList);
+                      ?>
                       <td style="text-align: center;">
-                        <div style="display: flex; gap: 4px; justify-content: center;">
+                        <div style="display: flex; gap: 5px; justify-content: center; align-items: center;">
                           <button type="button" class="btn-view" title="View Details">View</button>
-                          <button type="button" class="btn-print" title="Print Production Slip">Print</button>
-                          <?php if (hasPermission('production', 'update')): ?>
-                          <a href="production-add.php?id=<?php echo htmlspecialchars($item['id']); ?>" class="btn-edit" title="Edit Entry" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">Edit</a>
-                          <?php endif; ?>
+                          
+                          <!-- Dedicated Process Page Navigation (Single page, no dropdown) -->
+                          <a href="process.php?id=<?php echo urlencode($item['id']); ?>&mip=<?php echo urlencode($item['mip_no'] ?? ''); ?>" 
+                             class="btn-process" 
+                             style="text-decoration: none; padding: 4px 10px; border-radius: 4px; font-size: 0.78rem; font-weight: 600; background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; display: inline-flex; align-items: center; gap: 4px;"
+                             title="Open Process Workflow for this Part">
+                            Process
+                          </a>
+
                           <?php if (hasPermission('production', 'delete')): ?>
                           <button type="button" class="btn-delete" title="Delete Entry">Delete</button>
                           <?php endif; ?>
@@ -880,6 +1482,60 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
     </div>
   </div>
 
+  <!-- =========================================================
+       Left Slide-in Process Workflow Drawer / Slider (Half Screen)
+       ========================================================= -->
+  <div id="processTimelineSliderOverlay" class="slider-overlay"></div>
+
+  <div id="processTimelineSlider" class="slider-drawer">
+    <!-- Slider Header: Target Qty, Finished Goods (FG), Total Rejections Only -->
+    <div class="slider-header">
+      <div class="slider-header-wrap">
+        <div class="slider-summary-grid">
+          <div class="slider-stat-card stat-card-target">
+            <div class="slider-stat-lbl">Target Qty</div>
+            <div class="slider-stat-val" id="sldStatTarget">0 NOS</div>
+          </div>
+          <div class="slider-stat-card stat-card-fg">
+            <div class="slider-stat-lbl">Finished Goods (FG)</div>
+            <div class="slider-stat-val val-fg" id="sldStatPassed">0 NOS</div>
+          </div>
+          <div class="slider-stat-card stat-card-rej">
+            <div class="slider-stat-lbl">Total Rejections</div>
+            <div class="slider-stat-val val-rej" id="sldStatRejected">0 NOS</div>
+          </div>
+        </div>
+        <button type="button" class="slider-close-btn" id="btnCloseSlider" title="Close">&times;</button>
+      </div>
+    </div>
+
+    <!-- Slider Body: Vertical Line Timeline -->
+    <div class="slider-body" id="sldTimelineBody">
+      <div class="timeline-wrap">
+        <div class="timeline-track-line"></div>
+        <div id="sldTimelineStepsContainer">
+          <!-- Populated dynamically via JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Slider Footer -->
+    <div class="slider-footer">
+      <button type="button" class="btn-secondary" id="btnSliderPrintSlip" style="padding: 7px 14px; font-size: 0.82rem; display: inline-flex; align-items: center; gap: 6px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+        Print Slip (A4)
+      </button>
+
+      <div style="display: flex; gap: 8px;">
+        <button type="button" class="btn-secondary" id="btnCloseSliderFooter">Close</button>
+        <a href="#" id="btnSliderOpenWorkflow" class="btn-primary" style="text-decoration: none; padding: 7px 16px; font-size: 0.82rem; display: inline-flex; align-items: center; gap: 6px;">
+          <span>Open Full Process Workspace</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14"></path><polyline points="12 5 19 12 12 19"></polyline></svg>
+        </a>
+      </div>
+    </div>
+  </div>
+
   <!-- Delete Confirm Modal -->
   <div id="deleteModal" class="modal-overlay">
     <div class="modal-card" style="max-width: 400px;">
@@ -1003,13 +1659,28 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
         echo json_encode($catalog, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); 
       ?>;
 
+      const masterProcessList = <?php echo json_encode($processList, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
 
-
-
-
-
-
-
+      function getPartStagesForJs(pCode) {
+        if (pCode && partsCatalog[pCode] && partsCatalog[pCode].processes) {
+          try {
+            let pr = partsCatalog[pCode].processes;
+            if (typeof pr === 'string') pr = JSON.parse(pr);
+            if (Array.isArray(pr) && pr.length > 0) {
+              return pr.map((p, idx) => ({
+                code: p.code || String(idx + 1).padStart(3, '0'),
+                name: p.name || ('Stage ' + (idx + 1)),
+                remarks: p.remarks || ''
+              }));
+            }
+          } catch(e) {}
+        }
+        return masterProcessList.map((pm, idx) => ({
+          code: pm.process_code || String(idx + 1).padStart(3, '0'),
+          name: pm.process_name || ('Stage ' + (idx + 1)),
+          remarks: pm.remarks || ''
+        }));
+      }
 
       function populateRow(tr, data) {
         tr.setAttribute('data-id', data.id);
@@ -1028,7 +1699,7 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
         tr.setAttribute('data-rejected_qty', data.rejected_qty || 0);
         tr.setAttribute('data-operator_name', data.operator_name || '');
         tr.setAttribute('data-uom', data.uom || 'PCS');
-        tr.setAttribute('data-status', data.status || 'Completed');
+        tr.setAttribute('data-status', data.status || 'In Progress');
         tr.setAttribute('data-created_at', data.created_at ? data.created_at.substring(0, 10) : new Date().toISOString().substring(0, 10));
 
         const rejCell = parseFloat(data.rejected_qty || 0) > 0
@@ -1037,6 +1708,12 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
 
         const recByHtml = data.received_by ? `<br><span style="font-size: 0.72rem; color: var(--text-sub);">Rec: ${escapeHtml(data.received_by)}</span>` : '';
         const createDateStr = data.created_at ? formatDateDMY(data.created_at) : formatDateDMY(new Date().toISOString());
+        const partStages = getPartStagesForJs(data.part_code);
+
+        const isRowComplete = (data.status === 'Completed' || data.status === 'Complete');
+        const statusBadgeHtml = isRowComplete
+          ? `<span class="tag tag-completed" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0;"><span style="width: 6px; height: 6px; border-radius: 50%; background: #16a34a;"></span>Complete</span>`
+          : `<span class="tag tag-in-progress" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;"><span style="width: 6px; height: 6px; border-radius: 50%; background: #2563eb;"></span>Progress</span>`;
 
         tr.innerHTML = `
           <td style="color: var(--text-sub); font-weight: 600; text-align: center;">1</td>
@@ -1055,11 +1732,18 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
           <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; color: #1e293b;">
             ${formatNumber(data.target_qty)} <span style="font-size: 0.76rem; color: #64748b; font-weight: 500;">${escapeHtml(data.uom || 'PCS')}</span>
           </td>
+          <td style="text-align: center; white-space: nowrap;">
+            ${statusBadgeHtml}
+          </td>
           <td style="text-align: center;">
-            <div style="display: flex; gap: 4px; justify-content: center;">
+            <div style="display: flex; gap: 5px; justify-content: center; align-items: center;">
               <button type="button" class="btn-view" title="View Details">View</button>
-              <button type="button" class="btn-print" title="Print Production Slip">Print</button>
-              <a href="production-add.php?id=${encodeURIComponent(data.id)}" class="btn-edit" title="Edit Entry" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">Edit</a>
+              <a href="process.php?id=${encodeURIComponent(data.id)}&mip=${encodeURIComponent(data.mip_no || '')}" 
+                 class="btn-process" 
+                 style="text-decoration: none; padding: 4px 10px; border-radius: 4px; font-size: 0.78rem; font-weight: 600; background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; display: inline-flex; align-items: center; gap: 4px;"
+                 title="Open Process Workflow for this Part">
+                Process
+              </a>
               <button type="button" class="btn-delete" title="Delete Entry">Delete</button>
             </div>
           </td>
@@ -1178,6 +1862,296 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
       }
       closeViewPrdBtn.addEventListener('click', closeViewModal);
       closeViewPrdFooterBtn.addEventListener('click', closeViewModal);
+
+      // =========================================================
+      // Left Slide-in Process Workflow Slider (Half Screen)
+      // =========================================================
+      function closeProcessSlider() {
+        const overlay = document.getElementById('processTimelineSliderOverlay');
+        const drawer = document.getElementById('processTimelineSlider');
+        if (overlay) overlay.classList.remove('active');
+        if (drawer) drawer.classList.remove('active');
+        document.body.style.overflow = '';
+      }
+
+      const btnCloseSlider = document.getElementById('btnCloseSlider');
+      const btnCloseSliderFooter = document.getElementById('btnCloseSliderFooter');
+      const sliderOverlay = document.getElementById('processTimelineSliderOverlay');
+      const btnSliderPrintSlip = document.getElementById('btnSliderPrintSlip');
+
+      if (btnCloseSlider) btnCloseSlider.addEventListener('click', closeProcessSlider);
+      if (btnCloseSliderFooter) btnCloseSliderFooter.addEventListener('click', closeProcessSlider);
+      if (sliderOverlay) sliderOverlay.addEventListener('click', closeProcessSlider);
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          const drawer = document.getElementById('processTimelineSlider');
+          if (drawer && drawer.classList.contains('active')) {
+            closeProcessSlider();
+          }
+        }
+      });
+
+      if (btnSliderPrintSlip) {
+        btnSliderPrintSlip.addEventListener('click', () => {
+          if (currentViewingData) {
+            printProductionSlip(currentViewingData);
+          }
+        });
+      }
+
+      async function openProcessSlider(rowData) {
+        currentViewingData = rowData;
+        const mip = rowData.mipNo || '';
+        const id = rowData.id || '';
+        const partName = rowData.partName || rowData.partCode || 'Part Workflow';
+        const targetQty = rowData.targetQty || 0;
+        const uom = rowData.uom || 'PCS';
+        const customer = rowData.customerName || '-';
+
+        // Update Slider Top KPI Elements (Target, FG Passed, Rejections)
+        const elStatTarget = document.getElementById('sldStatTarget');
+        const elStatPassed = document.getElementById('sldStatPassed');
+        const elStatRejected = document.getElementById('sldStatRejected');
+
+        if (elStatTarget) elStatTarget.textContent = `${targetQty} ${uom}`;
+        if (elStatPassed) elStatPassed.textContent = `-`;
+        if (elStatRejected) elStatRejected.textContent = `-`;
+
+        // Direct link to process.php
+        const openWfBtn = document.getElementById('btnSliderOpenWorkflow');
+        if (openWfBtn) {
+          openWfBtn.href = `process.php?id=${encodeURIComponent(id)}&mip=${encodeURIComponent(mip)}`;
+        }
+
+        // Show Skeleton / Loading State
+        const container = document.getElementById('sldTimelineStepsContainer');
+        if (container) {
+          container.innerHTML = `
+            <div style="padding: 40px 20px; text-align: center; color: #64748b;">
+              <div style="display: inline-block; width: 34px; height: 34px; border: 3px solid #e2e8f0; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+              <div style="margin-top: 12px; font-weight: 700; font-size: 0.90rem; color: #1e293b;">Loading Workflow Progress &amp; Breakdown...</div>
+              <div style="font-size: 0.78rem; color: #94a3b8; margin-top: 4px;">Calculating live stage-by-stage pass &amp; rejection percentages</div>
+            </div>
+          `;
+        }
+
+        // Slide Drawer in from Right
+        const overlay = document.getElementById('processTimelineSliderOverlay');
+        const drawer = document.getElementById('processTimelineSlider');
+        if (overlay) overlay.classList.add('active');
+        if (drawer) drawer.classList.add('active');
+        document.body.style.overflow = 'hidden';
+
+        // Fetch Detailed Breakdown from API
+        try {
+          const res = await fetch(`api/process_stage.php?entry_id=${encodeURIComponent(id)}&mip_no=${encodeURIComponent(mip)}`);
+          const resJson = await res.json();
+
+          if (resJson.success && Array.isArray(resJson.stages) && resJson.stages.length > 0) {
+            renderProcessTimelineSteps(resJson.stages, resJson.overall, uom);
+          } else {
+            if (container) {
+              container.innerHTML = `
+                <div style="padding: 30px 20px; text-align: center; color: #64748b; background: #ffffff; border: 1px dashed #cbd5e1; border-radius: 8px;">
+                  <div style="font-weight: 700; color: #0f172a; margin-bottom: 4px;">No process stages logged yet</div>
+                  <div style="font-size: 0.84rem;">Click "Open Full Process Workspace" below to begin recording process progressions.</div>
+                </div>
+              `;
+            }
+          }
+        } catch (err) {
+          if (container) {
+            container.innerHTML = `
+              <div style="padding: 24px; text-align: center; color: #dc2626; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; font-size: 0.85rem;">
+                Failed to load process progress breakdown. Please try again or open the Process Workspace.
+              </div>
+            `;
+          }
+        }
+      }
+
+      // =========================================================
+      // Donut Pie Chart Math & SVG Arc Generator (Matches User Mockup)
+      // =========================================================
+      function polarToCartesian(cx, cy, r, angleInDegrees) {
+        const rad = (angleInDegrees - 90) * Math.PI / 180.0;
+        return {
+          x: cx + (r * Math.cos(rad)),
+          y: cy + (r * Math.sin(rad))
+        };
+      }
+
+      function describeDonutArc(cx, cy, rOuter, rInner, startAngle, endAngle) {
+        const start = polarToCartesian(cx, cy, rOuter, startAngle);
+        const end = polarToCartesian(cx, cy, rOuter, endAngle);
+        const largeArc = (endAngle - startAngle) > 180 ? 1 : 0;
+
+        const innerStart = polarToCartesian(cx, cy, rInner, startAngle);
+        const innerEnd = polarToCartesian(cx, cy, rInner, endAngle);
+
+        return [
+          'M', start.x.toFixed(2), start.y.toFixed(2),
+          'A', rOuter.toFixed(2), rOuter.toFixed(2), 0, largeArc, 1, end.x.toFixed(2), end.y.toFixed(2),
+          'L', innerEnd.x.toFixed(2), innerEnd.y.toFixed(2),
+          'A', rInner.toFixed(2), rInner.toFixed(2), 0, largeArc, 0, innerStart.x.toFixed(2), innerStart.y.toFixed(2),
+          'Z'
+        ].join(' ');
+      }
+
+      function renderDonutPieSvg(total, pass, rej, rem = 0, centerLabel = 'TOTAL QTY', size = 120) {
+        total = parseFloat(total) || 0;
+        pass = parseFloat(pass) || 0;
+        rej = parseFloat(rej) || 0;
+        rem = parseFloat(rem) || 0;
+
+        const cx = size / 2;
+        const cy = size / 2;
+        const rOuter = size * 0.44;
+        const rInner = size * 0.30;
+        const rMid = (rOuter + rInner) / 2;
+        const strokeWidth = rOuter - rInner;
+
+        let paths = '';
+
+        if (total <= 0) {
+          paths = `<circle cx="${cx}" cy="${cy}" r="${rMid.toFixed(2)}" fill="none" stroke="#e2e8f0" stroke-width="${strokeWidth.toFixed(2)}" />`;
+        } else {
+          const passPct = (pass / total) * 100;
+          const rejPct = (rej / total) * 100;
+          const remPct = Math.max(0, 100 - passPct - rejPct);
+
+          const segments = [];
+          if (pass > 0) segments.push({ pct: passPct, color: '#2563eb', label: 'Passed' });
+          if (rej > 0) segments.push({ pct: rejPct, color: '#8b5cf6', label: 'Rejected' });
+          if (remPct > 0.05) segments.push({ pct: remPct, color: '#cbd5e1', label: 'Pending' });
+
+          if (segments.length === 0) {
+            paths = `<circle cx="${cx}" cy="${cy}" r="${rMid.toFixed(2)}" fill="none" stroke="#e2e8f0" stroke-width="${strokeWidth.toFixed(2)}" />`;
+          } else if (segments.length === 1) {
+            paths = `<circle cx="${cx}" cy="${cy}" r="${rMid.toFixed(2)}" fill="none" stroke="${segments[0].color}" stroke-width="${strokeWidth.toFixed(2)}" />`;
+          } else {
+            const gap = 3.5; // Gap degrees between segments (matches user mockup)
+            let currAngle = 0;
+            segments.forEach(seg => {
+              const sweep = (seg.pct / 100) * 360;
+              const actualSweep = Math.max(0.6, sweep - gap);
+              const startA = currAngle + (gap / 2);
+              const endA = startA + actualSweep;
+              currAngle += sweep;
+
+              const d = describeDonutArc(cx, cy, rOuter, rInner, startA, endA);
+              paths += `<path d="${d}" fill="${seg.color}" />`;
+            });
+          }
+        }
+
+        const displayTotal = total % 1 === 0 ? parseInt(total) : total.toFixed(1);
+        const centerText = `
+          <text x="${cx}" y="${cy - 3}" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#0f172a" font-family="system-ui, -apple-system, sans-serif">${displayTotal}</text>
+          <text x="${cx}" y="${cy + 13}" text-anchor="middle" dominant-baseline="central" font-size="7.5" font-weight="700" letter-spacing="0.06em" fill="#64748b" font-family="system-ui, -apple-system, sans-serif">${centerLabel}</text>
+        `;
+
+        return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="display:block; flex-shrink:0;">${paths}${centerText}</svg>`;
+      }
+
+      function renderProcessTimelineSteps(stages, overall, uom) {
+        const container = document.getElementById('sldTimelineStepsContainer');
+        if (!container) return;
+        container.innerHTML = '';
+
+        if (overall) {
+          const finalFg = overall.final_fg_qty !== undefined ? overall.final_fg_qty : 0;
+          const totalRej = overall.total_rejected !== undefined ? overall.total_rejected : 0;
+          const elPassed = document.getElementById('sldStatPassed');
+          const elRejected = document.getElementById('sldStatRejected');
+          if (elPassed) elPassed.textContent = `${finalFg} ${uom}`;
+          if (elRejected) elRejected.textContent = `${totalRej} ${uom}`;
+        }
+
+        stages.forEach((st) => {
+          const passPct = parseFloat(st.pass_percent || 0);
+          const rejPct = parseFloat(st.rej_percent || 0);
+          const remPct = parseFloat(st.rem_percent || 0);
+
+          let nodeClass = '';
+          let nodeIcon = `${st.order}`;
+          let statusBadgeClass = 'step-status-waiting';
+
+          if (st.status === 'Completed') {
+            nodeClass = 'completed';
+            nodeIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+            statusBadgeClass = 'step-status-completed';
+          } else if (st.status === 'In Progress') {
+            nodeClass = 'in-progress';
+            statusBadgeClass = 'step-status-in-progress';
+          } else if (st.status === 'Ready') {
+            nodeClass = 'ready';
+            statusBadgeClass = 'step-status-ready';
+          }
+
+          const stepDiv = document.createElement('div');
+          stepDiv.className = 'timeline-step';
+
+          stepDiv.innerHTML = `
+            <div class="step-node ${nodeClass}">
+              ${nodeIcon}
+            </div>
+            <div class="step-card ${st.status === 'In Progress' ? 'active-stage' : ''}">
+              <div class="step-card-header">
+                <div class="step-proc-name">
+                  <span class="step-proc-order">#${st.order}</span>
+                  <span>${escapeHtml(st.name)}</span>
+                  ${st.is_final ? '<span style="font-size: 0.68rem; font-weight: 700; color: #16a34a; background: #dcfce7; padding: 1px 6px; border-radius: 4px; border: 1px solid #bbf7d0;">FINAL STAGE</span>' : ''}
+                </div>
+                <span class="step-status-tag ${statusBadgeClass}">${st.status}</span>
+              </div>
+
+              <!-- Simple Clean Breakdown (Non-congested) -->
+              <div class="simple-breakdown-row">
+                <span class="simple-stat-pill simple-stat-pass">
+                  <span class="simple-stat-dot" style="background: #2563eb;"></span>
+                  <span class="simple-stat-label">Passed:</span>
+                  <strong>${st.pass_qty} ${uom}</strong>
+                  <span class="simple-stat-pct">${passPct}%</span>
+                </span>
+
+                <span class="simple-stat-pill simple-stat-rej">
+                  <span class="simple-stat-dot" style="background: #8b5cf6;"></span>
+                  <span class="simple-stat-label">Rejected:</span>
+                  <strong>${st.rejected_qty} ${uom}</strong>
+                  <span class="simple-stat-pct">${rejPct}%</span>
+                </span>
+
+                ${st.remaining_qty > 0 ? `
+                  <span class="simple-stat-pill simple-stat-pending">
+                    <span class="simple-stat-dot" style="background: #94a3b8;"></span>
+                    <span class="simple-stat-label">Pending:</span>
+                    <strong>${st.remaining_qty} ${uom}</strong>
+                    <span class="simple-stat-pct">${remPct}%</span>
+                  </span>
+                ` : ''}
+              </div>
+
+              <!-- Sleek Multi-segment Progress Bar -->
+              <div class="simple-progress-bar" title="Passed: ${passPct}% | Rejected: ${rejPct}% | Pending: ${remPct}%">
+                <div class="simple-bar-seg pass" style="width: ${passPct}%;"></div>
+                <div class="simple-bar-seg rej" style="width: ${rejPct}%;"></div>
+                <div class="simple-bar-seg rem" style="width: ${remPct}%;"></div>
+              </div>
+
+              ${st.operator ? `
+                <div class="step-operator-meta">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                  <span>Operator: <strong>${escapeHtml(st.operator)}</strong></span>
+                </div>
+              ` : ''}
+            </div>
+          `;
+
+          container.appendChild(stepDiv);
+        });
+      }
 
       // High-Quality Code 128 (Subset B) SVG Barcode Generator (Offline, High-Density)
       function generateBarcode128Svg(text, height = 42) {
@@ -1530,14 +2504,17 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
         const row = e.target.closest('tr');
         if (!row || row.id === 'emptyTableRow') return;
 
-        // View Details
-        if (e.target.classList.contains('btn-view')) {
+        // View Details: Open Left Side Slider with Process Progress & Breakdown
+        const viewBtn = e.target.closest('.btn-view');
+        if (viewBtn) {
+          e.preventDefault();
+          e.stopPropagation();
           const rowData = getRowData(row);
-          openViewModal(rowData);
+          openProcessSlider(rowData);
           return;
         }
 
-        // Print Slip
+        // Print Slip (from View Modal only now)
         if (e.target.classList.contains('btn-print')) {
           const rowData = getRowData(row);
           printProductionSlip(rowData);
@@ -1554,6 +2531,21 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
           document.body.style.overflow = 'hidden';
         }
       });
+
+      // Document-level delegation for View button (handles static and dynamically created rows)
+      document.addEventListener('click', (e) => {
+        const viewBtn = e.target.closest('.btn-view');
+        if (viewBtn) {
+          const row = viewBtn.closest('tr');
+          if (row && row.id !== 'emptyTableRow') {
+            const rowData = getRowData(row);
+            openProcessSlider(rowData);
+          }
+        }
+      });
+      window.openProcessSlider = openProcessSlider;
+
+
 
       // Confirm Delete via API
       confirmDeleteBtn.addEventListener('click', async () => {
@@ -1580,6 +2572,32 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
           const resJson = await res.json();
 
           if (resJson.success) {
+            const mipNo = pendingDeleteRow?.getAttribute('data-mip_no') || '';
+            const delId = pendingDeleteRow?.getAttribute('data-id') || id || '';
+            const delPart = pendingDeleteRow?.getAttribute('data-part_code') || '';
+
+            // Clean localStorage & sessionStorage completely for this deleted entry and MIP
+            try {
+              [localStorage, sessionStorage].forEach(store => {
+                if (mipNo) {
+                  store.removeItem(`wip_wf_${encodeURIComponent(mipNo)}`);
+                  store.removeItem(`wip_wf_${mipNo}`);
+                }
+                if (delId) {
+                  store.removeItem(`wip_wf_${encodeURIComponent(mipNo)}_${delId}`);
+                  store.removeItem(`wip_wf_${mipNo}_${delId}`);
+                }
+                Object.keys(store).forEach(k => {
+                  const matchMip = mipNo && (k.includes(encodeURIComponent(mipNo)) || k.includes(mipNo));
+                  const matchId = delId && (k.includes(`_${delId}_`) || k.endsWith(`_${delId}`));
+                  const matchPart = delPart && (k.includes(encodeURIComponent(delPart)) || k.includes(delPart));
+                  if ((k.startsWith('wip_wf_') || k.startsWith('wip_run_logs_')) && (matchMip || matchId || matchPart)) {
+                    store.removeItem(k);
+                  }
+                });
+              });
+            } catch (e) {}
+
             pendingDeleteRow.remove();
             showToast('Production entry deleted from database.', 'success');
 
@@ -1587,7 +2605,7 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
             if (remainingRows.length === 0) {
               prdTableBody.innerHTML = `
                 <tr id="emptyTableRow">
-                  <td colspan="7" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
+                  <td colspan="8" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
                     No production entries found. Click <strong>+ Log Production</strong> to record shop-floor output.
                   </td>
                 </tr>
@@ -1648,6 +2666,56 @@ $pageTitle = 'Production Entry / Daily Production Report (DPR)';
         document.getElementById('statYieldRate').textContent = `${yRate}%`;
         document.getElementById('statTotalRejections').innerHTML = `${formatNumber(sumRej)} <span style="font-size:0.85rem; font-weight:500; color:var(--text-sub);">PCS</span>`;
       }
+
+      // Search & Status Filter (Live Filter for Table)
+      const prdSearchInput = document.getElementById('prdSearch');
+      const filterStatusSelect = document.getElementById('filterStatus');
+
+      function filterProductionTable() {
+        const query = (prdSearchInput ? prdSearchInput.value : '').toLowerCase().trim();
+        const selectedStatus = (filterStatusSelect ? filterStatusSelect.value : '').toLowerCase().trim();
+        const rows = prdTableBody.querySelectorAll('tr:not(#emptyTableRow)');
+        let visibleCount = 0;
+
+        rows.forEach(r => {
+          const rowText = r.textContent.toLowerCase();
+          const rowStatus = (r.getAttribute('data-status') || '').toLowerCase();
+
+          const matchesQuery = !query || rowText.includes(query);
+          let matchesStatus = true;
+          if (selectedStatus) {
+            if (selectedStatus === 'complete' || selectedStatus === 'completed') {
+              matchesStatus = (rowStatus === 'completed' || rowStatus === 'complete');
+            } else if (selectedStatus === 'progress' || selectedStatus === 'in progress') {
+              matchesStatus = (rowStatus === 'in progress' || rowStatus === 'progress');
+            } else {
+              matchesStatus = rowStatus.includes(selectedStatus);
+            }
+          }
+
+          if (matchesQuery && matchesStatus) {
+            r.style.display = '';
+            visibleCount++;
+          } else {
+            r.style.display = 'none';
+          }
+        });
+
+        let emptyFiltered = document.getElementById('emptyFilteredRow');
+        if (visibleCount === 0 && rows.length > 0) {
+          if (!emptyFiltered) {
+            emptyFiltered = document.createElement('tr');
+            emptyFiltered.id = 'emptyFilteredRow';
+            emptyFiltered.innerHTML = `<td colspan="8" style="text-align: center; padding: 30px; color: #94a3b8; font-style: italic;">No matching production entries found for the selected filter.</td>`;
+            prdTableBody.appendChild(emptyFiltered);
+          }
+        } else if (emptyFiltered) {
+          emptyFiltered.remove();
+        }
+      }
+
+      if (prdSearchInput) prdSearchInput.addEventListener('input', filterProductionTable);
+      if (filterStatusSelect) filterStatusSelect.addEventListener('change', filterProductionTable);
 
     });
   </script>

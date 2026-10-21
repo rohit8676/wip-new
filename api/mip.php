@@ -147,10 +147,12 @@ if ($method === 'POST') {
         try {
             $pdo->beginTransaction();
 
-            // Fetch record to restore stock
-            $findStmt = $pdo->prepare("SELECT child_parts_details FROM material_issue WHERE id = ?");
+            // Fetch record to restore stock and issue_no
+            $findStmt = $pdo->prepare("SELECT issue_no, child_parts_details FROM material_issue WHERE id = ?");
             $findStmt->execute([$id]);
             $found = $findStmt->fetch(PDO::FETCH_ASSOC);
+
+            $deletedIssueNo = $found ? trim($found['issue_no'] ?? '') : '';
 
             if ($found && !empty($found['child_parts_details'])) {
                 $details = json_decode($found['child_parts_details'], true);
@@ -171,13 +173,23 @@ if ($method === 'POST') {
                 }
             }
 
+            // Also delete associated production entries for this MIP
+            if (!empty($deletedIssueNo)) {
+                $delProdStmt = $pdo->prepare("DELETE FROM production_entry WHERE mip_no = ?");
+                $delProdStmt->execute([$deletedIssueNo]);
+            }
+
             // Delete issue record
             $delStmt = $pdo->prepare("DELETE FROM material_issue WHERE id = ?");
             $delStmt->execute([$id]);
 
             $pdo->commit();
 
-            echo json_encode(['success' => true, 'message' => 'MIP record deleted successfully.']);
+            echo json_encode([
+                'success' => true, 
+                'message' => 'MIP record deleted successfully.',
+                'deleted_issue_no' => $deletedIssueNo
+            ]);
         } catch (PDOException $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();

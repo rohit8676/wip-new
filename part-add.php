@@ -1,6 +1,7 @@
 <?php
 /**
  * WIP Management Portal - Add / Edit Part (Dedicated Page)
+ * Simple and clean design aligned with Production Log Entry (DPR).
  */
 require_once __DIR__ . '/auth/check_auth.php';
 require_once __DIR__ . '/config/db.php';
@@ -18,6 +19,8 @@ if ($isEditMode) {
 }
 
 $activeMenu = 'part-master.php';
+$headerBackUrl = 'part-master.php';
+$headerBackText = 'Back to Part Master';
 
 $pdo = getDBConnection();
 $childPartsAvailable = [];
@@ -62,141 +65,151 @@ if ($pdo) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Add New Part - WIP Management Portal</title>
-  
-  <!-- Modern Clean Google Font -->
+  <title><?php echo $isEditMode ? 'Edit Part' : 'Add New Part'; ?> - WIP Management Portal</title>
+
+  <!-- Google Fonts: Plus Jakarta Sans -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  
-  <link rel="stylesheet" href="css/dashboard.css">
+
+  <!-- Dashboard CSS -->
+  <link rel="stylesheet" href="css/dashboard.css?v=<?php echo time(); ?>">
 
   <style>
-    /* Add Part Page Styling */
-    .page-header-strip {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 8px;
-      flex-wrap: wrap;
+    /* Sticky Topbar Header (aligned with DPR) */
+    .layout-container, .main-content {
+      overflow-x: clip;
     }
-
-    .breadcrumb-nav {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.84rem;
-      color: var(--text-sub);
-    }
-
-    .breadcrumb-nav a {
-      color: var(--text-sub);
-      text-decoration: none;
-      transition: color 0.15s ease;
-    }
-
-    .breadcrumb-nav a:hover {
-      color: var(--primary);
-    }
-
-    .breadcrumb-separator {
-      color: #94a3b8;
-    }
-
-    .breadcrumb-current {
-      color: var(--text-main);
-      font-weight: 600;
+    .topbar {
+      position: -webkit-sticky;
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      background: var(--bg-white, #ffffff);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
     }
 
     .btn-back-link {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      padding: 8px 16px;
+      gap: 6px;
+      padding: 6px 14px;
       background: #ffffff;
       border: 1px solid var(--border);
       border-radius: 8px;
-      font-size: 0.85rem;
+      font-size: 0.82rem;
       font-weight: 600;
       color: var(--text-main);
       text-decoration: none;
       transition: all 0.15s ease;
       box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     }
-
     .btn-back-link:hover {
       background: #f1f5f9;
       border-color: #cbd5e1;
       color: var(--primary);
     }
 
-    .btn-back-link svg {
-      width: 16px;
-      height: 16px;
-    }
-
-    /* Main Container Card */
-    .part-form-card {
+    /* Main Form Card (DPR Style) */
+    .prd-form-card {
       background: #ffffff;
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 28px 32px;
       box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-      margin-bottom: 24px;
+      margin-bottom: 30px;
+    }
+    @media (max-width: 768px) {
+      .prd-form-card {
+        padding: 20px 16px;
+      }
     }
 
-    .form-section-title {
-      font-size: 1.15rem;
-      font-weight: 800;
-      color: var(--text-main);
-      margin-bottom: 4px;
+    /* Section Subheadings (DPR Style) */
+    .sub-section-title {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--primary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding-bottom: 6px;
+      border-bottom: 1.5px solid #e2e8f0;
+      margin-top: 24px;
+      margin-bottom: 16px;
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
     }
 
-    .form-section-subtitle {
-      font-size: 0.86rem;
-      color: var(--text-sub);
-      margin-bottom: 24px;
-      line-height: 1.5;
-    }
-
-    /* Top Row Grid (Part Code, Part Name, Status) */
-    .top-fields-grid {
+    /* Form Grids */
+    .form-grid-2 {
       display: grid;
-      grid-template-columns: 220px 1fr 180px;
-      gap: 20px;
-      margin-bottom: 30px;
-      align-items: flex-start;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px 24px;
     }
-
-    @media (max-width: 900px) {
-      .top-fields-grid {
-        grid-template-columns: 1fr 1fr;
-      }
-    }
-
-    @media (max-width: 600px) {
-      .top-fields-grid {
+    @media (max-width: 768px) {
+      .form-grid-2 {
         grid-template-columns: 1fr;
       }
     }
 
-    /* Mid Fields Grid (Weight, PDF, Excel) */
-    .mid-fields-grid {
+    .form-grid-3 {
       display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 20px;
-      margin-bottom: 20px;
-      align-items: flex-end;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px 24px;
     }
-
     @media (max-width: 900px) {
-      .mid-fields-grid {
+      .form-grid-3 {
         grid-template-columns: 1fr;
       }
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .form-group.full-width {
+      grid-column: 1 / -1;
+    }
+    .form-group label {
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .form-group .form-control {
+      width: 100%;
+      height: 40px;
+      padding: 0 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 0.88rem;
+      color: var(--text-main);
+      background: #ffffff;
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      box-sizing: border-box;
+    }
+    .form-group .form-control:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+    .form-group .form-control:disabled {
+      background: #f8fafc;
+      cursor: not-allowed;
+      color: #94a3b8;
+    }
+
+    /* Hide number input up/down spin buttons */
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    input[type=number] {
+      -moz-appearance: textfield;
+      appearance: textfield;
     }
 
     /* Input with suffix (kg) */
@@ -209,13 +222,12 @@ if ($pdo) {
       overflow: hidden;
       height: 40px;
       transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      box-sizing: border-box;
     }
-
     .input-with-suffix:focus-within {
       border-color: var(--primary);
       box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
     }
-
     .input-with-suffix input {
       flex: 1;
       height: 100%;
@@ -223,18 +235,17 @@ if ($pdo) {
       outline: none !important;
       padding: 0 12px;
       font-family: inherit;
-      font-size: 0.90rem;
+      font-size: 0.88rem;
       color: var(--text-main);
       background: transparent;
       box-shadow: none !important;
       box-sizing: border-box;
     }
-
     .input-suffix {
       background: #f1f5f9;
       color: #475569;
-      font-size: 0.86rem;
-      font-weight: 600;
+      font-size: 0.82rem;
+      font-weight: 700;
       padding: 0 14px;
       height: 100%;
       display: flex;
@@ -248,29 +259,25 @@ if ($pdo) {
     .upload-dropzone {
       display: flex;
       align-items: center;
-      justify-content: center;
       gap: 12px;
-      height: 42px;
-      border: 1.5px dashed #bfdbfe;
+      height: 40px;
+      border: 1.5px dashed #cbd5e1;
       background: #f8fafc;
       border-radius: 6px;
-      padding: 0 12px;
+      padding: 0 14px;
       cursor: pointer;
       transition: all 0.18s ease;
       box-sizing: border-box;
       user-select: none;
     }
-
     .upload-dropzone:hover {
       background: #eff6ff;
       border-color: #3b82f6;
     }
-
     .upload-dropzone.has-file {
       border-color: #10b981;
       background: #f0fdf4;
     }
-
     .upload-icon {
       width: 20px;
       height: 20px;
@@ -280,216 +287,128 @@ if ($pdo) {
       justify-content: center;
       flex-shrink: 0;
     }
-
-    .upload-icon svg {
-      width: 18px;
-      height: 18px;
-    }
-
     .upload-dropzone.has-file .upload-icon {
       color: #10b981;
     }
-
     .upload-text-wrap {
       display: flex;
       flex-direction: column;
       line-height: 1.25;
       overflow: hidden;
       text-align: left;
+      flex: 1;
+      min-width: 0;
     }
-
     .upload-title {
-      font-size: 0.80rem;
+      font-size: 0.82rem;
       font-weight: 600;
       color: #334155;
       white-space: nowrap;
       text-overflow: ellipsis;
       overflow: hidden;
     }
-
     .upload-subtitle {
       font-size: 0.70rem;
       color: #64748b;
     }
 
-    .field-item {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .field-item label {
-      font-size: 0.88rem;
-      font-weight: 700;
-      color: var(--text-main);
-    }
-
-    .field-item .form-control {
-      width: 100%;
-      height: 40px;
-      padding: 0 12px;
+    /* Simple Table inside Rounded Container (DPR Style) */
+    .table-container-wrap {
+      overflow-x: auto;
       border: 1px solid var(--border);
-      border-radius: 6px;
-      font-family: inherit;
-      font-size: 0.90rem;
-      color: var(--text-main);
-      background: #ffffff;
-      outline: none;
-      transition: border-color 0.15s ease, box-shadow 0.15s ease;
-      box-sizing: border-box;
+      border-radius: 8px;
+      margin-bottom: 24px;
     }
-
-    .field-item .form-control:focus {
-      border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
-    }
-
-    /* Sub-Section Box */
-    .section-box {
-      margin-bottom: 30px;
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
-      padding: 22px 24px;
-      background: #fafcff;
-    }
-
-    .section-header-row {
+    .table-section-header {
       display: flex;
-      align-items: center;
       justify-content: space-between;
-      margin-bottom: 16px;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-
-    .section-heading {
-      font-size: 1.05rem;
-      font-weight: 800;
-      color: #0f172a;
-      display: flex;
       align-items: center;
-      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .table-section-desc {
+      font-size: 0.80rem;
+      color: var(--text-sub);
+    }
+    .count-badge {
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: #e0f2fe;
+      color: #0369a1;
+      font-weight: 600;
+      border: 1px solid #bae6fd;
+      white-space: nowrap;
     }
 
-    .section-subtitle {
-      font-size: 0.82rem;
-      color: #64748b;
-      margin-top: 3px;
-      font-weight: 400;
-    }
-
-    .btn-add-table-row {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 7px 14px;
-      background: #ffffff;
-      border: 1px solid #cbd5e1;
-      border-radius: 6px;
-      font-size: 0.82rem;
-      font-weight: 700;
-      color: var(--primary);
-      cursor: pointer;
-      transition: all 0.15s ease;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
-    }
-
-    .btn-add-table-row:hover {
-      background: var(--primary-light);
-      border-color: var(--primary);
-    }
-
-    /* Structured Tables */
-    .structured-table {
+    .simple-table {
       width: 100%;
       border-collapse: collapse;
-      background: #ffffff;
-      border: 1px solid #cbd5e1;
-      border-radius: 6px;
-      overflow: hidden;
+      font-size: 0.84rem;
+      margin: 0;
     }
-
-    .structured-table th,
-    .structured-table td {
-      border: 1px solid #cbd5e1;
-    }
-
-    .structured-table th {
-      background: #f8fafc;
-      padding: 10px 14px;
-      text-align: left;
-      font-size: 0.80rem;
+    .simple-table th {
+      padding: 9px 12px;
+      font-size: 0.76rem;
       font-weight: 700;
-      color: #334155;
+      color: var(--text-sub);
       text-transform: uppercase;
-      letter-spacing: 0.03em;
+      letter-spacing: 0.04em;
+      border-bottom: 1px solid var(--border);
+      background: #f8fafc;
+      text-align: left;
     }
-
-    .structured-table td {
+    .simple-table td {
       padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
       vertical-align: middle;
-      font-size: 0.88rem;
+      font-size: 0.86rem;
+      color: var(--text-main);
+    }
+    .simple-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+    .simple-table tbody tr:hover td {
+      background: #fafcff;
     }
 
     .cell-select, .cell-input {
       width: 100%;
-      height: 36px;
+      height: 38px;
       padding: 0 10px;
-      border: 1px solid #cbd5e1;
-      border-radius: 4px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
       font-family: inherit;
       font-size: 0.86rem;
       outline: none;
       background: #ffffff;
       color: var(--text-main);
+      box-sizing: border-box;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
-
     .cell-select:focus, .cell-input:focus {
       border-color: var(--primary);
-      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
     }
 
     .uom-badge {
       display: inline-block;
       font-weight: 700;
-      color: #334155;
-      font-size: 0.86rem;
-      padding: 2px 6px;
-    }
-
-    /* Child Part Code & Process Code Badge */
-    .cp-code-badge {
-      display: inline-block;
-      font-weight: 700;
-      font-size: 0.84rem;
-      color: #475569;
-      background: #f8fafc;
-      padding: 5px 12px;
-      border-radius: 6px;
-      border: 1px solid #cbd5e1;
-      min-width: 90px;
-      text-align: center;
+      color: #0284c7;
+      background: #f0f9ff;
+      border: 1px solid #bae6fd;
+      border-radius: 4px;
+      font-size: 0.76rem;
+      padding: 3px 8px;
       letter-spacing: 0.02em;
-      transition: all 0.15s ease;
-      font-family: inherit;
     }
 
-    .cp-code-badge.has-val {
-      color: var(--primary);
-      background: #eff6ff;
-      border-color: #bfdbfe;
-      font-weight: 800;
-    }
-
-    /* Action Buttons Group */
+    /* Action Buttons in Rows */
     .action-btn-group {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
     }
-
-    /* Circular Action Buttons (+ and -) matching wireframe */
     .btn-circle-action {
       width: 28px;
       height: 28px;
@@ -508,29 +427,24 @@ if ($pdo) {
       transition: all 0.15s ease;
       flex-shrink: 0;
     }
-
     .btn-circle-action svg {
       width: 13px;
       height: 13px;
     }
-
     .btn-circle-add {
       border-color: var(--primary);
       color: var(--primary);
     }
-
     .btn-circle-add:hover {
       background: #eff6ff;
       border-color: #1d4ed8;
       color: #1d4ed8;
       transform: scale(1.08);
     }
-
     .btn-circle-minus {
       border-color: #64748b;
       color: #64748b;
     }
-
     .btn-circle-minus:hover {
       border-color: #ef4444;
       color: #ef4444;
@@ -538,136 +452,15 @@ if ($pdo) {
       transform: scale(1.08);
     }
 
-    /* FG Variant Type Section */
-    .fg-variant-card {
-      background: #ffffff;
-      border: 1px solid #cbd5e1;
-      border-radius: 8px;
-      padding: 20px 22px;
-    }
-
-    .fg-variant-label {
-      font-size: 0.95rem;
-      font-weight: 800;
-      color: var(--text-main);
-      margin-bottom: 6px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .fg-variant-hint {
-      font-size: 0.82rem;
-      color: #64748b;
-      margin-bottom: 12px;
-    }
-
-    .fg-variant-input {
-      width: 100%;
-      height: 42px;
-      padding: 0 14px;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      font-family: inherit;
-      font-size: 0.90rem;
-      color: var(--text-main);
-      outline: none;
-      transition: all 0.15s ease;
-    }
-
-    .fg-variant-input:focus {
-      border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
-    }
-
-    .quick-tags-wrap {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 10px;
-      flex-wrap: wrap;
-    }
-
-    .quick-tag-label {
-      font-size: 0.78rem;
-      font-weight: 700;
-      color: #64748b;
-    }
-
-    .quick-tag {
-      padding: 4px 10px;
-      background: #f1f5f9;
-      border: 1px solid #e2e8f0;
-      border-radius: 999px;
-      font-size: 0.76rem;
-      font-weight: 600;
-      color: #334155;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      user-select: none;
-    }
-
-    .quick-tag:hover {
-      background: var(--primary-light);
-      border-color: #bfdbfe;
-      color: var(--primary);
-    }
-
-    .quick-tag.selected {
-      background: var(--primary);
-      border-color: var(--primary);
-      color: #ffffff;
-    }
-
-    /* Footer Action Buttons */
-    .form-footer-actions {
+    /* Action Buttons in Footer (DPR Style) */
+    .form-card-footer {
       display: flex;
       align-items: center;
       justify-content: flex-end;
       gap: 12px;
-      padding-top: 22px;
+      margin-top: 28px;
+      padding-top: 20px;
       border-top: 1px solid var(--border);
-    }
-
-    .btn-cancel {
-      padding: 10px 22px;
-      background: #ffffff;
-      color: var(--text-main);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      font-size: 0.88rem;
-      font-weight: 600;
-      text-decoration: none;
-      transition: background 0.15s ease;
-    }
-
-    .btn-cancel:hover {
-      background: #f1f5f9;
-    }
-
-    .btn-save-part {
-      padding: 10px 26px;
-      background: var(--primary);
-      color: #ffffff;
-      border: none;
-      border-radius: 8px;
-      font-size: 0.90rem;
-      font-weight: 700;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      transition: all 0.15s ease;
-      box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
-    }
-
-    .btn-save-part:hover {
-      background: var(--primary-hover);
-    }
-
-    .btn-save-part:disabled {
-      opacity: 0.65;
-      cursor: not-allowed;
     }
 
     /* Toast Notification */
@@ -681,7 +474,6 @@ if ($pdo) {
       gap: 10px;
       pointer-events: none;
     }
-
     .toast {
       min-width: 280px;
       max-width: 380px;
@@ -700,16 +492,13 @@ if ($pdo) {
       font-size: 0.88rem;
       color: var(--text-main);
     }
-
     .toast.show {
       opacity: 1;
       transform: translateY(0);
     }
-
     .toast-success {
       border-left-color: #10b981;
     }
-
     .toast-error {
       border-left-color: #ef4444;
     }
@@ -719,22 +508,6 @@ if ($pdo) {
       border-color: #ef4444 !important;
       background-color: #fffafb !important;
       box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15) !important;
-    }
-
-    /* File preview link for edit mode */
-    .file-view-link {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      margin-top: 6px;
-      font-size: 0.78rem;
-      font-weight: 600;
-      color: var(--primary);
-      text-decoration: none;
-    }
-
-    .file-view-link:hover {
-      text-decoration: underline;
     }
   </style>
 </head>
@@ -748,93 +521,77 @@ if ($pdo) {
 
   <div class="layout-container">
     
-    <!-- Reusable Sidebar Component -->
-    <?php include __DIR__ . '/includes/sidebar.php'; ?>
+    <!-- Sidebar -->
+    <?php require_once __DIR__ . '/includes/sidebar.php'; ?>
 
-    <!-- Main Content Area -->
     <div class="main-content">
       
-      <!-- Reusable Top Bar Component -->
-      <?php include __DIR__ . '/includes/header.php'; ?>
+      <!-- Topbar Header -->
+      <?php require_once __DIR__ . '/includes/header.php'; ?>
 
-      <!-- Page Body -->
       <div class="content-body">
         
-        <!-- Header Strip with Breadcrumb & Back Button -->
-        <div class="page-header-strip">
-          <nav class="breadcrumb-nav" aria-label="Breadcrumb">
-            <a href="dashboard.php">Dashboard</a>
-            <span class="breadcrumb-separator">/</span>
-            <a href="part-master.php">Part Master</a>
-            <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current"><?php echo $isEditMode ? 'Edit Part' : 'Add Part'; ?></span>
-          </nav>
+        <!-- Main Form Container (DPR Card Style) -->
+        <div class="prd-form-card">
 
-          <a href="part-master.php" class="btn-back-link">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="19" y1="12" x2="5" y2="12"></line>
-              <polyline points="12 19 5 12 12 5"></polyline>
-            </svg>
-            Back to Part Master Directory
-          </a>
-        </div>
-
-        <!-- Main Form Card -->
-        <div class="part-form-card">
           <form id="addPartForm" novalidate>
             <input type="hidden" id="editPartId" value="<?php echo $isEditMode ? htmlspecialchars($existingPart['id']) : ''; ?>">
-            
-            <h1 class="form-section-title">
-              <?php echo $isEditMode ? 'Edit Part Master: ' . htmlspecialchars($existingPart['part_code']) : 'Part Master Addition'; ?>
-            </h1>
-            <p class="form-section-subtitle">
-              <?php echo $isEditMode ? 'Update primary part specifications, mapped child parts, required manufacturing processes, and FG output variants.' : 'Add primary part information, mapped child parts, required manufacturing processes, and Finished Goods (FG) variant type.'; ?>
-            </p>
 
-            <!-- 1. Top Row: Part Code*, Part Name*, Status -->
-            <div class="top-fields-grid">
-              
-              <div class="field-item">
-                <label for="inputPartCode">Part Code*</label>
+            <!-- 1. Part Details & Specifications Section -->
+            <div class="sub-section-title" style="margin-top: 0;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+              Part Details &amp; Specifications
+            </div>
+
+            <!-- Top Grid: Part Code, Part Name, Status -->
+            <div class="form-grid-3">
+              <div class="form-group">
+                <label for="inputPartCode">Part Code *</label>
                 <input type="text" id="inputPartCode" class="form-control" placeholder="e.g., PT-1008" value="<?php echo $isEditMode ? htmlspecialchars($existingPart['part_code']) : ''; ?>" required autocomplete="off">
               </div>
 
-              <div class="field-item">
-                <label for="inputPartName">Part Name*</label>
+              <div class="form-group">
+                <label for="inputPartName">Part Name *</label>
                 <input type="text" id="inputPartName" class="form-control" placeholder="e.g., Rear Bumper Sub-Assembly" value="<?php echo $isEditMode ? htmlspecialchars($existingPart['part_name']) : ''; ?>" required autocomplete="off">
               </div>
 
-              <div class="field-item">
+              <div class="form-group">
                 <label for="inputStatus">Status</label>
                 <select id="inputStatus" class="form-control" required>
                   <option value="Active" <?php echo ($isEditMode && strcasecmp($existingPart['status'] ?? '', 'Active') === 0) ? 'selected' : (! $isEditMode ? 'selected' : ''); ?>>Active</option>
                   <option value="Inactive" <?php echo ($isEditMode && strcasecmp($existingPart['status'] ?? '', 'Inactive') === 0) ? 'selected' : ''; ?>>Inactive</option>
                 </select>
               </div>
-
             </div>
 
-            <!-- Mid Row: Gross Weight, Product Data Sheet (PDF), Description File (Excel) -->
+            <!-- Mid Grid: Gross Weight & Remarks -->
+            <div class="form-grid-3" style="margin-top: 18px;">
+              <div class="form-group">
+                <label for="inputGrossWeight">Gross Weight per Part (kg) *</label>
+                <div class="input-with-suffix">
+                  <input type="number" step="any" min="0" id="inputGrossWeight" placeholder="e.g. 0.250" value="<?php echo $isEditMode ? htmlspecialchars($existingPart['gross_weight'] ?? '') : ''; ?>" required autocomplete="off">
+                  <span class="input-suffix">kg</span>
+                </div>
+              </div>
+
+              <div class="form-group" style="grid-column: span 2;">
+                <label for="inputRemarks">Remarks / Notes</label>
+                <input type="text" id="inputRemarks" class="form-control" placeholder="Enter any additional notes (optional)" value="<?php echo $isEditMode ? htmlspecialchars($existingPart['remarks'] ?? '') : ''; ?>" autocomplete="off">
+              </div>
+            </div>
+
+            <!-- File Uploads Grid: Product Data Sheet (PDF) & Description File (Excel) -->
             <?php 
               $hasPdf = ($isEditMode && !empty($existingPart['pdf_file'])); 
               $pdfName = $hasPdf ? basename($existingPart['pdf_file']) : 'Click to upload PDF';
               $hasExcel = ($isEditMode && !empty($existingPart['excel_file'])); 
               $excelName = $hasExcel ? basename($existingPart['excel_file']) : 'Click to upload Excel';
             ?>
-            <div class="mid-fields-grid">
+            <div class="form-grid-2" style="margin-top: 18px; margin-bottom: 26px;">
               
-              <!-- 1. Gross Weight per Part (kg) * -->
-              <div class="field-item">
-                <label for="inputGrossWeight">Gross Weight per Part (kg) <span style="color: #ef4444;">*</span></label>
-                <div class="input-with-suffix">
-                  <input type="number" step="any" min="0" id="inputGrossWeight" placeholder="Enter weight (e.g. 0.250)" value="<?php echo $isEditMode ? htmlspecialchars($existingPart['gross_weight'] ?? '') : ''; ?>" required autocomplete="off">
-                  <span class="input-suffix">kg</span>
-                </div>
-              </div>
-
-              <!-- 2. Product Data Sheet (PDF) * -->
-              <div class="field-item">
-                <label>Product Data Sheet (PDF) <span style="color: #ef4444;">*</span></label>
+              <!-- PDF Upload -->
+              <div class="form-group">
+                <label>Product Data Sheet (PDF) *</label>
                 <input type="file" id="inputPdfFile" accept=".pdf" style="display: none;">
                 <div class="upload-dropzone <?php echo $hasPdf ? 'has-file' : ''; ?>" id="pdfDropzone" title="<?php echo $hasPdf ? 'Click to replace PDF' : 'Click to upload PDF'; ?>">
                   <div class="upload-icon">
@@ -851,9 +608,9 @@ if ($pdo) {
                 </div>
               </div>
 
-              <!-- 3. Description File (Excel) * -->
-              <div class="field-item">
-                <label>Description File (Excel) <span style="color: #ef4444;">*</span></label>
+              <!-- Excel Upload -->
+              <div class="form-group">
+                <label>Description File (Excel) *</label>
                 <input type="file" id="inputExcelFile" accept=".xlsx,.xls,.csv" style="display: none;">
                 <div class="upload-dropzone <?php echo $hasExcel ? 'has-file' : ''; ?>" id="excelDropzone" title="<?php echo $hasExcel ? 'Click to replace Excel' : 'Click to upload Excel'; ?>">
                   <div class="upload-icon">
@@ -872,105 +629,110 @@ if ($pdo) {
 
             </div>
 
-            <!-- Remarks / Notes -->
-            <div class="field-item" style="margin-bottom: 28px;">
-              <label for="inputRemarks">Remarks / Notes</label>
-              <input type="text" id="inputRemarks" class="form-control" placeholder="Enter any additional notes (optional)" value="<?php echo $isEditMode ? htmlspecialchars($existingPart['remarks'] ?? '') : ''; ?>" autocomplete="off">
+            <!-- 2. Section: Child Parts (BOM Requirements) -->
+            <div class="sub-section-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+              RM &amp; Child Parts (BOM Requirements)
             </div>
 
-            <!-- 2. Section: Child Parts -->
-            <div class="section-box">
-              <div class="section-header-row">
-                <div>
-                  <h2 class="section-heading">Child Parts</h2>
-                  <div class="section-subtitle">Raw material & child part bill of materials (BOM) needed to produce this part</div>
-                </div>
-              </div>
+            <div class="table-section-header">
+              <span class="table-section-desc">
+                Raw material &amp; child part bill of materials (BOM) needed to produce this part
+              </span>
+              <span id="cpCountBadge" class="count-badge">
+                1 Item
+              </span>
+            </div>
 
-              <div style="overflow-x: auto;">
-                <table class="structured-table" id="cpTable">
-                  <thead>
-                    <tr>
-                      <th style="width: 50px; text-align: center;">#</th>
-                      <th style="min-width: 300px;">RM & CHILD PART</th>
-                      <th style="width: 170px;">QUANTITY / RATIO</th>
-                      <th style="width: 120px; text-align: center;">UOM</th>
-                      <th style="width: 100px; text-align: center;">ACTION</th>
-                    </tr>
-                  </thead>
-                  <tbody id="cpTableBody">
-                    <!-- Dynamic Child Part Rows -->
-                  </tbody>
-                </table>
-              </div>
+            <div class="table-container-wrap">
+              <table class="simple-table" id="cpTable">
+                <thead>
+                  <tr>
+                    <th style="width: 45px; text-align: center;">#</th>
+                    <th style="min-width: 280px;">RM &amp; Child Part *</th>
+                    <th style="width: 180px;">Quantity / Ratio *</th>
+                    <th style="width: 100px; text-align: center;">UOM</th>
+                    <th style="width: 90px; text-align: center;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="cpTableBody">
+                  <!-- Dynamic Child Part Rows -->
+                </tbody>
+              </table>
             </div>
 
             <!-- 3. Section: Required Processes -->
-            <div class="section-box">
-              <div class="section-header-row">
-                <div>
-                  <h2 class="section-heading">Processes</h2>
-                  <div class="section-subtitle">Sequence of manufacturing, fabrication, or machining processes required for this part</div>
-                </div>
-              </div>
+            <div class="sub-section-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+              Manufacturing Processes &amp; Stages
+            </div>
 
-              <div style="overflow-x: auto;">
-                <table class="structured-table" id="prcTable">
-                  <thead>
-                    <tr>
-                      <th style="width: 50px; text-align: center;">#</th>
-                      <th style="min-width: 280px;">PROCESS</th>
-                      <th style="min-width: 250px;">STAGE DETAILS / REMARKS</th>
-                      <th style="width: 100px; text-align: center;">ACTION</th>
-                    </tr>
-                  </thead>
-                  <tbody id="prcTableBody">
-                    <!-- Dynamic Process Rows -->
-                  </tbody>
-                </table>
-              </div>
+            <div class="table-section-header">
+              <span class="table-section-desc">
+                Sequence of manufacturing, fabrication, or machining processes required for this part
+              </span>
+              <span id="prcCountBadge" class="count-badge">
+                1 Process
+              </span>
+            </div>
+
+            <div class="table-container-wrap">
+              <table class="simple-table" id="prcTable">
+                <thead>
+                  <tr>
+                    <th style="width: 45px; text-align: center;">#</th>
+                    <th style="min-width: 260px;">Process *</th>
+                    <th style="min-width: 260px;">Stage Details / Remarks</th>
+                    <th style="width: 90px; text-align: center;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="prcTableBody">
+                  <!-- Dynamic Process Rows -->
+                </tbody>
+              </table>
             </div>
 
             <!-- 4. Section: Output Variants -->
-            <div class="section-box">
-              <div class="section-header-row">
-                <div>
-                  <h2 class="section-heading">Output Variants</h2>
-                  <div class="section-subtitle">Specify which finished goods (FG) variant types or output parts will be produced from this part</div>
-                </div>
-              </div>
-
-              <div style="overflow-x: auto;">
-                <table class="structured-table" id="outputVariantsTable">
-                  <thead>
-                    <tr>
-                      <th style="width: 50px; text-align: center;">#</th>
-                      <th style="width: 220px;">Output Part Code.</th>
-                      <th style="min-width: 280px;">Output Part Name</th>
-                      <th style="width: 100px; text-align: center;">ACTION</th>
-                    </tr>
-                  </thead>
-                  <tbody id="outputVariantsTableBody">
-                    <!-- Dynamic Output Variant Rows -->
-                  </tbody>
-                </table>
-              </div>
+            <div class="sub-section-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+              Finished Goods (FG) Output Variants
             </div>
 
-            <!-- Form Action Footer -->
-            <div class="form-footer-actions">
-              <a href="part-master.php" class="btn-cancel">Cancel</a>
-              <button type="submit" class="btn-save-part" id="savePartBtn">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px;">
-                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-                  <polyline points="17 21 17 13 7 13 7 21"></polyline>
-                  <polyline points="7 3 7 8 15 8"></polyline>
-                </svg>
+            <div class="table-section-header">
+              <span class="table-section-desc">
+                Specify FG output part variants produced from this base part (prefixed with Part Code)
+              </span>
+              <span id="varCountBadge" class="count-badge">
+                1 Variant
+              </span>
+            </div>
+
+            <div class="table-container-wrap">
+              <table class="simple-table" id="outputVariantsTable">
+                <thead>
+                  <tr>
+                    <th style="width: 45px; text-align: center;">#</th>
+                    <th style="width: 220px;">Output Part Code *</th>
+                    <th style="min-width: 280px;">Output Part Name *</th>
+                    <th style="width: 90px; text-align: center;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="outputVariantsTableBody">
+                  <!-- Dynamic Output Variant Rows -->
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Form Footer Actions (DPR Style) -->
+            <div class="form-card-footer">
+              <a href="part-master.php" class="btn-secondary" style="height: 38px; display: inline-flex; align-items: center; text-decoration: none;">Cancel</a>
+              <button type="submit" class="btn-primary" id="savePartBtn" style="height: 38px; min-width: 170px;">
                 <?php echo $isEditMode ? 'Update Part' : '+ Save Part'; ?>
               </button>
             </div>
 
           </form>
+
         </div>
 
       </div>
@@ -992,8 +754,8 @@ if ($pdo) {
       const addPartForm = document.getElementById('addPartForm');
       const cpTableBody = document.getElementById('cpTableBody');
       const prcTableBody = document.getElementById('prcTableBody');
-      const savePartBtn = document.getElementById('savePartBtn');
       const outputVariantsTableBody = document.getElementById('outputVariantsTableBody');
+      const savePartBtn = document.getElementById('savePartBtn');
       const inputPartCode = document.getElementById('inputPartCode');
       const toastContainer = document.getElementById('toastContainer');
 
@@ -1070,16 +832,16 @@ if ($pdo) {
 
         let iconSvg = '';
         if (type === 'success') {
-          iconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
+          iconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;flex-shrink:0;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
         } else if (type === 'error') {
-          iconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>`;
+          iconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;flex-shrink:0;"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>`;
         } else {
-          iconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
+          iconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;flex-shrink:0;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
         }
 
         toast.innerHTML = `
-          <span style="display:inline-flex; width:20px; height:20px;">${iconSvg}</span>
-          <span>${message}</span>
+          <span>${iconSvg}</span>
+          <span>${escapeHtml(message)}</span>
         `;
 
         toastContainer.appendChild(toast);
@@ -1093,7 +855,7 @@ if ($pdo) {
           setTimeout(() => {
             if (toast.parentElement) toast.remove();
           }, 280);
-        }, 4000);
+        }, 3800);
       };
 
       // Helper to escape HTML characters
@@ -1107,13 +869,30 @@ if ($pdo) {
           .replace(/'/g, '&#039;');
       }
 
-      // Re-index serial numbers (1, 2, 3, 4...) across table rows
+      // Update row count badges
+      function updateRowCounts() {
+        const cpCount = cpTableBody ? cpTableBody.querySelectorAll('tr').length : 0;
+        const prcCount = prcTableBody ? prcTableBody.querySelectorAll('tr').length : 0;
+        const varCount = outputVariantsTableBody ? outputVariantsTableBody.querySelectorAll('tr').length : 0;
+
+        const cpBadge = document.getElementById('cpCountBadge');
+        if (cpBadge) cpBadge.textContent = `${cpCount} Item${cpCount !== 1 ? 's' : ''}`;
+
+        const prcBadge = document.getElementById('prcCountBadge');
+        if (prcBadge) prcBadge.textContent = `${prcCount} Process${prcCount !== 1 ? 'es' : ''}`;
+
+        const varBadge = document.getElementById('varCountBadge');
+        if (varBadge) varBadge.textContent = `${varCount} Variant${varCount !== 1 ? 's' : ''}`;
+      }
+
+      // Re-index serial numbers (1, 2, 3...)
       function reindexRows(tbody) {
         const rows = tbody.querySelectorAll('tr');
         rows.forEach((r, idx) => {
           const numCell = r.querySelector('.row-num');
           if (numCell) numCell.textContent = idx + 1;
         });
+        updateRowCounts();
       }
 
       // Real-time update child part dropdown options to exclude already selected parts
@@ -1145,7 +924,6 @@ if ($pdo) {
             const cpCode = (cp.part_code || '').trim();
             const cpCodeLower = cpCode.toLowerCase();
 
-            // Include if not selected elsewhere OR if it is the current selection for this row
             if (!selectedValues.has(cpCodeLower) || cpCodeLower === currentValLower) {
               countAvailable++;
               const opt = document.createElement('option');
@@ -1477,9 +1255,8 @@ if ($pdo) {
       updateProcessDropdowns();
 
       // ==========================================
-      // 3. OUTPUT VARIANTS TABLE ROWS LOGIC (Without Qty/Ratio & UOM)
+      // 3. OUTPUT VARIANTS TABLE ROWS LOGIC
       // ==========================================
-      // Helper to get Part Code prefix with trailing dash, e.g. "APT" -> "APT-"
       function getPartCodePrefix(code = null) {
         const raw = (code !== null ? code : (inputPartCode ? inputPartCode.value : '')).trim();
         if (!raw) return '';
@@ -1489,7 +1266,6 @@ if ($pdo) {
       function addOutputVariantRow(code = '', name = '', insertAfterEl = null) {
         const tr = document.createElement('tr');
 
-        // If code is not explicitly provided, autofill with current Part Code prefix (e.g. APT-)
         const effectivePrefix = getPartCodePrefix();
         const initialCode = (code !== '') ? code : effectivePrefix;
         const currentPlaceholder = effectivePrefix ? `e.g., ${effectivePrefix}A` : 'e.g., FG-1001-A';
@@ -1591,17 +1367,12 @@ if ($pdo) {
           const varCodeInput = tr.querySelector('.var-code');
           if (!varCodeInput) return;
 
-          // Dynamically update placeholder to reflect current part code
           varCodeInput.placeholder = placeholderText;
-
           const currentVal = varCodeInput.value;
 
-          // 1. If empty, or matches old prefix, or matches old part code (without dash)
           if (!currentVal || currentVal === oldPrefix || (lastPartCode && currentVal === lastPartCode)) {
             varCodeInput.value = newPrefix;
-          }
-          // 2. If it started with old prefix, swap out old prefix with new prefix while keeping the suffix
-          else if (oldPrefix && currentVal.startsWith(oldPrefix)) {
+          } else if (oldPrefix && currentVal.startsWith(oldPrefix)) {
             const suffix = currentVal.substring(oldPrefix.length);
             varCodeInput.value = newPrefix ? (newPrefix + suffix) : suffix;
           }
@@ -1787,7 +1558,7 @@ if ($pdo) {
           });
         }
 
-        // 4. Validate [Output Part Code, Output Part Name] (No Qty/Ratio or UOM needed)
+        // 4. Validate [Output Part Code, Output Part Name]
         const outputVariants = [];
         const seenVarCodes = new Set();
         const varRows = outputVariantsTableBody.querySelectorAll('tr');

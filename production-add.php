@@ -1138,6 +1138,27 @@ if ($pdo) {
             return;
           }
 
+          // Clear old stale workflow states and run logs so the new entry starts completely fresh
+          if (!id) {
+            const cleanMip = mipNo || '';
+            const cleanPart = partCode || '';
+            try {
+              [localStorage, sessionStorage].forEach(store => {
+                if (cleanMip) {
+                  store.removeItem(`wip_wf_${encodeURIComponent(cleanMip)}`);
+                  store.removeItem(`wip_wf_${cleanMip}`);
+                }
+                Object.keys(store).forEach(k => {
+                  const matchMip = cleanMip && (k.includes(encodeURIComponent(cleanMip)) || k.includes(cleanMip));
+                  const matchPart = cleanPart && (k.includes(encodeURIComponent(cleanPart)) || k.includes(cleanPart));
+                  if ((k.startsWith('wip_wf_') || k.startsWith('wip_run_logs_')) && (matchMip || matchPart)) {
+                    store.removeItem(k);
+                  }
+                });
+              });
+            } catch (e) {}
+          }
+
           showToast(id ? 'Production entry updated successfully!' : 'Production entry logged successfully!', 'success');
           setTimeout(() => {
             window.location.href = 'production.php';
