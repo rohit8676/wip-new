@@ -45,28 +45,38 @@ try {
         WHERE status = 'Active' OR status IS NULL
     ")->fetch(PDO::FETCH_ASSOC);
 
+    $selectedMonth = $_GET['month'] ?? 'all';
+    $monthFilterSql = "";
+    $monthFilterAnd = "";
+    if ($selectedMonth !== 'all' && preg_match('/^\d{4}-\d{2}$/', $selectedMonth)) {
+        $monthFilterSql = " WHERE CONVERT(VARCHAR(7), created_at, 120) = '$selectedMonth' ";
+        $monthFilterAnd = " AND CONVERT(VARCHAR(7), created_at, 120) = '$selectedMonth' ";
+    }
+
     // WIP / Material Issue (MIP) Stats
     $mipStats = $pdo->query("
         SELECT 
             COUNT(*) AS total_wip_issues,
-            ISNULL(SUM(issued_qty), 0) AS total_issued_qty,
-            COUNT(CASE WHEN status = 'Issued' OR status = 'In Progress' THEN 1 END) AS active_wip_count,
-            COUNT(CASE WHEN status = 'Completed' OR status = 'Closed' THEN 1 END) AS completed_wip_count
+            ISNULL(SUM(issued_qty), 0) AS total_issued_qty
         FROM material_issue
+        $monthFilterSql
     ")->fetch(PDO::FETCH_ASSOC);
 
-    // Production Performance Stats
+    // Production Performance Stats & Active WIP Status
     $prodStats = $pdo->query("
         SELECT 
             COUNT(*) AS total_runs,
             ISNULL(SUM(target_qty), 0) AS total_target_qty,
             ISNULL(SUM(ok_qty), 0) AS total_ok_qty,
             ISNULL(SUM(rejected_qty), 0) AS total_rejected_qty,
-            ISNULL(SUM(rework_qty), 0) AS total_rework_qty
+            ISNULL(SUM(rework_qty), 0) AS total_rework_qty,
+            COUNT(CASE WHEN status = 'In Progress' OR (target_qty > 0 AND (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0)) < target_qty) THEN 1 END) AS active_wip_count,
+            COUNT(CASE WHEN (target_qty > 0 AND (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0)) >= target_qty) OR (target_qty = 0 AND status = 'Completed') THEN 1 END) AS completed_wip_count
         FROM production_entry
+        $monthFilterSql
     ")->fetch(PDO::FETCH_ASSOC);
 
-    $totalProduced = floatval($prodStats['total_ok_qty']) + floatval($prodStats['total_rejected_qty']);
+    $totalProduced = floatval($prodStats['total_ok_qty'] ?? 0) + floatval($prodStats['total_rejected_qty'] ?? 0);
     $yieldRate = ($totalProduced > 0) ? round((floatval($prodStats['total_ok_qty']) / $totalProduced) * 100, 1) : 100;
     $rejectionRate = ($totalProduced > 0) ? round((floatval($prodStats['total_rejected_qty']) / $totalProduced) * 100, 1) : 0;
 
@@ -92,17 +102,18 @@ try {
     $partMasterCount = $pdo->query("SELECT COUNT(*) AS cnt FROM part_master WHERE status = 'Active' OR status IS NULL")->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0;
 
     // -------------------------------------------------------------
+    // -------------------------------------------------------------
     // 2. SHIFT-WISE PRODUCTION (For Bar Chart)
     // -------------------------------------------------------------
     $shiftData = $pdo->query("
         SELECT 
-            ISNULL(shift, 'Unassigned') AS shift_name,
+            ISNULL(NULLIF(shift, ''), 'General') AS shift_name,
             ISNULL(SUM(ok_qty), 0) AS ok_qty,
             ISNULL(SUM(rejected_qty), 0) AS rejected_qty,
             ISNULL(SUM(target_qty), 0) AS target_qty
         FROM production_entry
-        GROUP BY shift
-        ORDER BY shift
+        GROUP BY ISNULL(NULLIF(shift, ''), 'General')
+        ORDER BY shift_name
     ")->fetchAll(PDO::FETCH_ASSOC);
 
     // -------------------------------------------------------------
@@ -110,11 +121,11 @@ try {
     // -------------------------------------------------------------
     $processData = $pdo->query("
         SELECT 
-            ISNULL(process_name, 'General') AS process_name,
+            ISNULL(NULLIF(process_name, ''), 'General') AS process_name,
             ISNULL(SUM(ok_qty), 0) AS ok_qty,
             ISNULL(SUM(rejected_qty), 0) AS rejected_qty
         FROM production_entry
-        GROUP BY process_name
+        GROUP BY ISNULL(NULLIF(process_name, ''), 'General')
         ORDER BY ok_qty DESC
     ")->fetchAll(PDO::FETCH_ASSOC);
 
@@ -137,7 +148,38 @@ try {
     ")->fetchAll(PDO::FETCH_ASSOC);
 
     // -------------------------------------------------------------
-    // 6. RECENT SHOP FLOOR PRODUCTION ENTRIES (Latest 8)
+    // 6. SHOP FLOOR PRODUCTION PARTS (Running & Completed)
+    // -------------------------------------------------------------
+    $runningParts = $pdo->query("
+        SELECT TOP 100 id, mip_no, customer_name, customer_code, so_number, work_order, part_code, part_name,
+               process_name, shift, target_qty, ok_qty, rejected_qty, operator_name, uom, status,
+               current_stage_order, current_stage_name, total_stages,
+               CONVERT(VARCHAR(10), created_at, 120) AS entry_date,
+               CONVERT(VARCHAR(16), created_at, 120) AS created_at
+        FROM production_entry
+        $monthFilterSql
+        ORDER BY id DESC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+
+    $runningPartsInProgCount = 0;
+    $runningPartsCompCount = 0;
+    foreach ($runningParts as &$rp) {
+        $tq = floatval($rp['target_qty'] ?? 0);
+        $ok = floatval($rp['ok_qty'] ?? 0);
+        $rej = floatval($rp['rejected_qty'] ?? 0);
+        $st = trim($rp['status'] ?? '');
+        $isDone = ($tq > 0 && ($ok + $rej) >= $tq) || ($tq == 0 && strcasecmp($st, 'Completed') === 0);
+        $rp['effective_status'] = $isDone ? 'Completed' : 'In Progress';
+        if ($isDone) {
+            $runningPartsCompCount++;
+        } else {
+            $runningPartsInProgCount++;
+        }
+    }
+    unset($rp);
+
+    // -------------------------------------------------------------
+    // 7. RECENT SHOP FLOOR PRODUCTION ENTRIES (Latest 8)
     // -------------------------------------------------------------
     $recentProduction = $pdo->query("
         SELECT TOP 8
@@ -146,11 +188,12 @@ try {
             operator_name, uom, status,
             CONVERT(VARCHAR(16), created_at, 120) AS created_at
         FROM production_entry
+        $monthFilterSql
         ORDER BY id DESC
     ")->fetchAll(PDO::FETCH_ASSOC);
 
     // -------------------------------------------------------------
-    // 7. RECENT DISPATCHES (Latest 5)
+    // 8. RECENT DISPATCHES (Latest 5)
     // -------------------------------------------------------------
     $recentDispatches = $pdo->query("
         SELECT TOP 5
@@ -174,8 +217,8 @@ try {
             'cp_low_stock' => intval($cpStats['low_stock_cp'] ?? 0),
 
             'wip_total' => intval($mipStats['total_wip_issues'] ?? 0),
-            'wip_active' => intval($mipStats['active_wip_count'] ?? 0),
-            'wip_completed' => intval($mipStats['completed_wip_count'] ?? 0),
+            'wip_active' => intval($prodStats['active_wip_count'] ?? 0),
+            'wip_completed' => intval($prodStats['completed_wip_count'] ?? 0),
             'wip_issued_qty' => floatval($mipStats['total_issued_qty'] ?? 0),
 
             'prod_target' => floatval($prodStats['total_target_qty'] ?? 0),
@@ -199,6 +242,12 @@ try {
             'processes' => $processData,
             'top_rm' => $topRmStock,
             'top_cp' => $topCpStock
+        ],
+        'running_parts' => $runningParts,
+        'running_parts_counts' => [
+            'total' => count($runningParts),
+            'in_progress' => $runningPartsInProgCount,
+            'completed' => $runningPartsCompCount
         ],
         'recent_production' => $recentProduction,
         'recent_dispatches' => $recentDispatches

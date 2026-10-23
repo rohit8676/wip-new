@@ -18,6 +18,7 @@ $shifts = [];
 $processes = [];
 $topRm = [];
 $topCp = [];
+$runningParts = [];
 $recentProduction = [];
 
 if ($pdo) {
@@ -38,17 +39,27 @@ if ($pdo) {
             $kpi['cp_low_stock'] = intval($cpRow['low']);
         }
 
-        // WIP
-        $mipRow = $pdo->query("SELECT COUNT(*) AS total, ISNULL(SUM(issued_qty), 0) AS issued, COUNT(CASE WHEN status = 'Issued' OR status = 'In Progress' THEN 1 END) AS active FROM material_issue")->fetch(PDO::FETCH_ASSOC);
+        // WIP (Total Issues & Total Quantity from material_issue)
+        $mipRow = $pdo->query("SELECT COUNT(*) AS total, ISNULL(SUM(issued_qty), 0) AS issued FROM material_issue")->fetch(PDO::FETCH_ASSOC);
         if ($mipRow) {
             $kpi['wip_total'] = intval($mipRow['total']);
             $kpi['wip_issued_qty'] = floatval($mipRow['issued']);
-            $kpi['wip_active'] = intval($mipRow['active']);
         }
 
-        // Production
-        $prdRow = $pdo->query("SELECT ISNULL(SUM(target_qty), 0) AS target, ISNULL(SUM(ok_qty), 0) AS ok_q, ISNULL(SUM(rejected_qty), 0) AS rej_q FROM production_entry")->fetch(PDO::FETCH_ASSOC);
+        // Production & Active WIP (from production_entry)
+        $prdRow = $pdo->query("
+            SELECT 
+                COUNT(*) AS total_runs,
+                ISNULL(SUM(target_qty), 0) AS target, 
+                ISNULL(SUM(ok_qty), 0) AS ok_q, 
+                ISNULL(SUM(rejected_qty), 0) AS rej_q,
+                COUNT(CASE WHEN status = 'In Progress' OR (target_qty > 0 AND (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0)) < target_qty) THEN 1 END) AS active_wip,
+                COUNT(CASE WHEN (target_qty > 0 AND (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0)) >= target_qty) OR (target_qty = 0 AND status = 'Completed') THEN 1 END) AS completed_wip
+            FROM production_entry
+        ")->fetch(PDO::FETCH_ASSOC);
         if ($prdRow) {
+            $kpi['wip_active'] = intval($prdRow['active_wip']);
+            $kpi['wip_completed'] = intval($prdRow['completed_wip']);
             $kpi['prod_target'] = floatval($prdRow['target']);
             $kpi['prod_ok'] = floatval($prdRow['ok_q']);
             $kpi['prod_rejected'] = floatval($prdRow['rej_q']);
@@ -66,17 +77,67 @@ if ($pdo) {
         if ($dspRow) $kpi['dispatch_qty'] = floatval($dspRow['dsp']);
 
         // Shifts
-        $shifts = $pdo->query("SELECT ISNULL(shift, 'General') AS shift_name, ISNULL(SUM(ok_qty), 0) AS ok_qty, ISNULL(SUM(rejected_qty), 0) AS rejected_qty, ISNULL(SUM(target_qty), 0) AS target_qty FROM production_entry GROUP BY shift ORDER BY shift")->fetchAll(PDO::FETCH_ASSOC);
+        $shifts = $pdo->query("
+            SELECT 
+                ISNULL(NULLIF(shift, ''), 'General') AS shift_name, 
+                ISNULL(SUM(ok_qty), 0) AS ok_qty, 
+                ISNULL(SUM(rejected_qty), 0) AS rejected_qty, 
+                ISNULL(SUM(target_qty), 0) AS target_qty 
+            FROM production_entry 
+            GROUP BY ISNULL(NULLIF(shift, ''), 'General') 
+            ORDER BY shift_name
+        ")->fetchAll(PDO::FETCH_ASSOC);
 
         // Processes
-        $processes = $pdo->query("SELECT ISNULL(process_name, 'General') AS process_name, ISNULL(SUM(ok_qty), 0) AS ok_qty FROM production_entry GROUP BY process_name ORDER BY ok_qty DESC")->fetchAll(PDO::FETCH_ASSOC);
+        $processes = $pdo->query("
+            SELECT 
+                ISNULL(NULLIF(process_name, ''), 'General') AS process_name, 
+                ISNULL(SUM(ok_qty), 0) AS ok_qty 
+            FROM production_entry 
+            GROUP BY ISNULL(NULLIF(process_name, ''), 'General') 
+            ORDER BY ok_qty DESC
+        ")->fetchAll(PDO::FETCH_ASSOC);
 
         // Top RM & CP
         $topRm = $pdo->query("SELECT TOP 4 rm_code, rm_name, current_stock, uom FROM rm_master ORDER BY current_stock DESC")->fetchAll(PDO::FETCH_ASSOC);
         $topCp = $pdo->query("SELECT TOP 4 part_code, part_name, current_stock, uom FROM child_part_master ORDER BY current_stock DESC")->fetchAll(PDO::FETCH_ASSOC);
 
+        // Shop Floor Production Parts (Running & Completed)
+        $runningParts = $pdo->query("
+            SELECT TOP 100 id, mip_no, customer_name, customer_code, so_number, work_order, part_code, part_name,
+                   process_name, shift, target_qty, ok_qty, rejected_qty, operator_name, uom, status,
+                   current_stage_order, current_stage_name, total_stages,
+                   CONVERT(VARCHAR(10), created_at, 120) AS entry_date,
+                   CONVERT(VARCHAR(16), created_at, 120) AS created_at
+            FROM production_entry 
+            ORDER BY id DESC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+
+        $runningCount = 0;
+        $completedCount = 0;
+        foreach ($runningParts as &$rp) {
+            $tq = floatval($rp['target_qty'] ?? 0);
+            $ok = floatval($rp['ok_qty'] ?? 0);
+            $rej = floatval($rp['rejected_qty'] ?? 0);
+            $st = trim($rp['status'] ?? '');
+            $isDone = ($tq > 0 && ($ok + $rej) >= $tq) || ($tq == 0 && strcasecmp($st, 'Completed') === 0);
+            $rp['effective_status'] = $isDone ? 'Completed' : 'In Progress';
+            if ($isDone) {
+                $completedCount++;
+            } else {
+                $runningCount++;
+            }
+        }
+        unset($rp);
+
         // Recent Production Entries
-        $recentProduction = $pdo->query("SELECT TOP 8 id, mip_no, work_order, part_code, part_name, process_name, shift, target_qty, ok_qty, rejected_qty, operator_name, uom, status, CONVERT(VARCHAR(16), created_at, 120) AS created_at FROM production_entry ORDER BY id DESC")->fetchAll(PDO::FETCH_ASSOC);
+        $recentProduction = $pdo->query("
+            SELECT TOP 8 id, mip_no, work_order, part_code, part_name, process_name, shift, 
+                         target_qty, ok_qty, rejected_qty, operator_name, uom, status, 
+                         CONVERT(VARCHAR(16), created_at, 120) AS created_at 
+            FROM production_entry 
+            ORDER BY id DESC
+        ")->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         // Fallback gracefully
     }
@@ -178,57 +239,67 @@ if ($pdo) {
       height: 15px;
     }
 
-    /* KPI Grid */
+    /* KPI Grid - Single 5-Card Row */
     .kpi-row-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      width: 100%;
     }
 
     .kpi-box {
       background: #ffffff;
       border: 1px solid var(--dash-border);
-      border-radius: 12px;
-      padding: 20px;
+      border-radius: 10px;
+      padding: 13px 14px;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-      transition: all 0.2s ease;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      position: relative;
+      overflow: hidden;
+      min-width: 0;
     }
 
     .kpi-box:hover {
       transform: translateY(-2px);
-      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.06);
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
+      border-color: #cbd5e1;
     }
 
     .kpi-box-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 12px;
+      margin-bottom: 6px;
+      gap: 6px;
     }
 
     .kpi-box-tag {
-      font-size: 0.78rem;
+      font-size: 0.72rem;
       font-weight: 700;
       color: var(--dash-muted);
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .kpi-icon-circ {
-      width: 38px;
-      height: 38px;
-      border-radius: 10px;
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
+      flex-shrink: 0;
     }
 
     .kpi-icon-circ svg {
-      width: 20px;
-      height: 20px;
+      width: 16px;
+      height: 16px;
     }
 
     .kpi-icon-circ.blue { background: #eff6ff; color: #2563eb; }
@@ -238,36 +309,69 @@ if ($pdo) {
     .kpi-icon-circ.purple { background: #f5f3ff; color: #7c3aed; }
 
     .kpi-box-val {
-      font-size: 1.85rem;
+      font-size: 1.52rem;
       font-weight: 800;
       color: var(--dash-dark);
-      line-height: 1.1;
+      line-height: 1.15;
       letter-spacing: -0.02em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .kpi-box-val span {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--dash-muted);
     }
 
     .kpi-box-foot {
-      margin-top: 10px;
+      margin-top: 8px;
+      padding-top: 7px;
+      border-top: 1px solid #f1f5f9;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      font-size: 0.78rem;
+      gap: 4px;
+      font-size: 0.72rem;
       color: var(--dash-muted);
+      white-space: nowrap;
+    }
+
+    .kpi-box-foot > span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .kpi-chip {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      font-size: 0.74rem;
+      gap: 3px;
+      font-size: 0.69rem;
       font-weight: 700;
-      padding: 2px 7px;
-      border-radius: 6px;
+      padding: 1.5px 6px;
+      border-radius: 5px;
+      flex-shrink: 0;
+      white-space: nowrap;
     }
 
     .kpi-chip.green { background: #ecfdf5; color: #059669; }
     .kpi-chip.amber { background: #fffbeb; color: #b45309; }
     .kpi-chip.blue { background: #eff6ff; color: #1d4ed8; }
     .kpi-chip.red { background: #fef2f2; color: #dc2626; }
+
+    @media (max-width: 1200px) {
+      .kpi-row-grid {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+      .kpi-row-grid {
+        grid-template-columns: 1fr;
+      }
+    }
 
     /* Visualizations Grid */
     .viz-grid-row {
@@ -469,7 +573,7 @@ if ($pdo) {
       border-radius: 999px;
     }
 
-    .badge-status.completed { background: #ecfdf5; color: #059669; }
+    
     .badge-status.in-progress { background: #eff6ff; color: #2563eb; }
 
     .spin-icon-anim {
@@ -479,6 +583,708 @@ if ($pdo) {
     @keyframes spin-loop {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
+    }
+
+    /* Running In-Progress Parts Component Styles */
+    .live-pulse-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 0.74rem;
+      font-weight: 700;
+    }
+
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #2563eb;
+      box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.7);
+      animation: pulse-ring 1.8s infinite;
+      display: inline-block;
+    }
+
+    .pulse-dot-sm {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #2563eb;
+      display: inline-block;
+    }
+
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.7); }
+      70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(37, 99, 235, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+    }
+
+    .running-search-box {
+      position: relative;
+      width: 100%;
+      min-width: 250px;
+      max-width: 380px;
+    }
+
+    .running-search-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 15px;
+      height: 15px;
+      color: #94a3b8;
+      pointer-events: none;
+    }
+
+    .running-search-input {
+      width: 100%;
+      padding: 7px 32px 7px 32px;
+      font-size: 0.82rem;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #ffffff;
+      color: #1e293b;
+      outline: none;
+      transition: all 0.15s ease;
+      font-family: inherit;
+      box-sizing: border-box;
+    }
+
+    .running-search-input:focus {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    .running-search-clear {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      border: none;
+      background: transparent;
+      color: #94a3b8;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+
+    .running-search-clear:hover {
+      color: #1e293b;
+    }
+
+
+    .running-parts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 12px;
+    }
+
+    .running-card-item {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-left: 4px solid #2563eb;
+      border-radius: 8px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+      transition: all 0.15s ease;
+    }
+
+    .running-card-item:hover {
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);
+      border-color: #cbd5e1;
+      border-left-color: #1d4ed8;
+    }
+
+    .running-card-item.is-completed {
+      border-left-color: #16a34a;
+    }
+
+    .running-card-item.is-completed:hover {
+      border-left-color: #15803d;
+      box-shadow: 0 4px 12px rgba(22, 163, 74, 0.08);
+    }
+
+    .running-card-info {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .running-part-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .running-part-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #0f172a;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .running-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.67rem;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .running-status-pill.in-prog {
+      background: #eff6ff;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
+    }
+
+    .running-status-pill.comp {
+      background: #f0fdf4;
+      color: #15803d;
+      border: 1px solid #bbf7d0;
+    }
+
+    .pulse-dot-sm {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #2563eb;
+      display: inline-block;
+      animation: pulse-ring-sm 1.5s infinite;
+    }
+
+    @keyframes pulse-ring-sm {
+      0% { transform: scale(0.95); opacity: 0.9; }
+      50% { transform: scale(1.3); opacity: 0.4; }
+      100% { transform: scale(0.95); opacity: 0.9; }
+    }
+
+    .running-part-meta {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 0.78rem;
+    }
+
+    .running-part-mip {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid #e2e8f0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+
+    .running-part-mip strong {
+      color: #0f172a;
+      font-weight: 700;
+    }
+
+    .running-part-code {
+      background: #f8fafc;
+      color: #64748b;
+      border: 1px solid #e2e8f0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+
+    .running-part-cust {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.78rem;
+      color: #64748b;
+      font-weight: 500;
+    }
+
+    .running-part-qty-pill {
+      font-size: 0.70rem;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #f8fafc;
+      color: #475569;
+      border: 1px solid #e2e8f0;
+      line-height: 1.2;
+    }
+
+    .running-part-qty-pill.comp {
+      background: #f0fdf4;
+      color: #166534;
+      border-color: #dcfce7;
+    }
+
+    .running-part-qty-pill.in-prog {
+      background: #eff6ff;
+      color: #1e40af;
+      border-color: #dbeafe;
+    }
+
+    .btn-view {
+      padding: 5px 14px;
+      background: #ffffff;
+      border: 1px solid var(--dash-border);
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #0284c7;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+
+    .btn-view:hover {
+      background: #f0f9ff;
+      border-color: #0284c7;
+      color: #0369a1;
+      box-shadow: 0 1px 3px rgba(2, 132, 199, 0.15);
+    }
+
+    .running-empty-state {
+      text-align: center;
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: #f8fafc;
+      border: 1px dashed #cbd5e1;
+      border-radius: 8px;
+    }
+
+    .btn-clear-search-link {
+      margin-top: 10px;
+      padding: 5px 14px;
+      background: #2563eb;
+      color: #ffffff;
+      border: none;
+      border-radius: 5px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .btn-clear-search-link:hover {
+      background: #1d4ed8;
+    }
+
+    /* =========================================================
+       Right Slide-in Process Workflow Drawer / Slider (Half Screen)
+       ========================================================= */
+    .slider-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.48);
+      backdrop-filter: blur(4px);
+      z-index: 99990;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      display: none;
+    }
+    .slider-overlay.active {
+      opacity: 1 !important;
+      pointer-events: auto !important;
+      display: block !important;
+    }
+
+    .slider-drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 50vw;
+      min-width: 460px;
+      max-width: 760px;
+      height: 100vh;
+      background: #ffffff;
+      z-index: 99995;
+      box-shadow: -20px 0 50px rgba(15, 23, 42, 0.25);
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      overflow: hidden;
+      visibility: hidden;
+    }
+    .slider-drawer.active {
+      transform: translateX(0) !important;
+      visibility: visible !important;
+    }
+
+    @media (max-width: 768px) {
+      .slider-drawer {
+        width: 92vw;
+        min-width: unset;
+      }
+    }
+
+    /* Slider Header (Clean White, 3 KPI Cards Only) */
+    .slider-header {
+      background: #ffffff;
+      color: #0f172a;
+      padding: 14px 18px;
+      flex-shrink: 0;
+      position: relative;
+      border-bottom: 1px solid #e2e8f0;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    }
+    .slider-header-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .slider-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      flex: 1;
+    }
+    .slider-stat-card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      transition: all 0.15s ease;
+    }
+    .slider-stat-card:hover {
+      background: #ffffff;
+      border-color: #cbd5e1;
+      box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+    }
+    .slider-stat-card.stat-card-target {
+      border-left: 3px solid #2563eb;
+    }
+    .slider-stat-card.stat-card-fg {
+      border-left: 3px solid #16a34a;
+      background: linear-gradient(180deg, #ffffff 0%, #f0fdf4 100%);
+    }
+    .slider-stat-card.stat-card-rej {
+      border-left: 3px solid #dc2626;
+      background: linear-gradient(180deg, #ffffff 0%, #fef2f2 100%);
+    }
+    .slider-stat-lbl {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #64748b;
+    }
+    .slider-stat-val {
+      font-size: 1.05rem;
+      font-weight: 800;
+      color: #0f172a;
+      margin-top: 2px;
+      letter-spacing: -0.01em;
+    }
+    .slider-stat-val.val-fg { color: #16a34a; }
+    .slider-stat-val.val-rej { color: #dc2626; }
+    .slider-close-btn {
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      color: #64748b;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      flex-shrink: 0;
+    }
+    .slider-close-btn:hover {
+      background: #e2e8f0;
+      color: #0f172a;
+      transform: scale(1.05);
+    }
+
+    /* Slider Body & Vertical Line Timeline */
+    .slider-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 22px;
+      background: #f8fafc;
+      position: relative;
+    }
+
+    .timeline-wrap {
+      position: relative;
+      padding-left: 10px;
+    }
+    .timeline-track-line {
+      position: absolute;
+      left: 27px;
+      top: 18px;
+      bottom: 24px;
+      width: 3px;
+      background: #cbd5e1;
+      border-radius: 3px;
+      z-index: 1;
+    }
+
+    .timeline-step {
+      display: flex;
+      gap: 16px;
+      position: relative;
+      margin-bottom: 22px;
+      z-index: 2;
+    }
+    .timeline-step:last-child {
+      margin-bottom: 6px;
+    }
+
+    .step-node {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 0.84rem;
+      flex-shrink: 0;
+      background: #ffffff;
+      border: 2px solid #94a3b8;
+      color: #64748b;
+      box-shadow: 0 0 0 4px #f8fafc, 0 1px 3px rgba(0, 0, 0, 0.08);
+      transition: all 0.2s ease;
+    }
+    .step-node.completed {
+      background: #10b981;
+      border-color: #059669;
+      color: #ffffff;
+      box-shadow: 0 0 0 4px #f8fafc, 0 2px 6px rgba(16, 185, 129, 0.35);
+    }
+    .step-node.in-progress {
+      background: #2563eb;
+      border-color: #1d4ed8;
+      color: #ffffff;
+      box-shadow: 0 0 0 4px #f8fafc, 0 0 0 7px rgba(37, 99, 235, 0.2);
+    }
+    .step-node.ready {
+      background: #ffffff;
+      border-color: #3b82f6;
+      color: #2563eb;
+    }
+
+    .step-card {
+      flex: 1;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 9px;
+      padding: 13px 15px;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 2px 6px rgba(15, 23, 42, 0.02);
+      transition: all 0.15s ease;
+    }
+    .step-card:hover {
+      border-color: #cbd5e1;
+      transform: translateX(2px);
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+    }
+    .step-card.active-stage {
+      border-color: #93c5fd;
+      background: linear-gradient(180deg, #ffffff 0%, #f0f7ff 100%);
+    }
+
+    .step-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .step-proc-name {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #0f172a;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .step-proc-order {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: #64748b;
+      background: #f1f5f9;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+
+    .step-status-tag {
+      font-size: 0.70rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 3px 8px;
+      border-radius: 4px;
+    }
+    .step-status-completed {
+      background: #dcfce7;
+      color: #15803d;
+      border: 1px solid #bbf7d0;
+    }
+    .step-status-in-progress {
+      background: #dbeafe;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
+    }
+    .step-status-ready {
+      background: #fef3c7;
+      color: #b45309;
+      border: 1px solid #fde68a;
+    }
+    .step-status-waiting {
+      background: #f1f5f9;
+      color: #64748b;
+      border: 1px solid #e2e8f0;
+    }
+
+    .simple-breakdown-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 8px 0;
+    }
+    .simple-stat-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.80rem;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      color: #334155;
+    }
+    .simple-stat-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .simple-stat-label {
+      font-weight: 500;
+      color: #64748b;
+      font-size: 0.76rem;
+    }
+    .simple-stat-pct {
+      font-weight: 800;
+      font-size: 0.74rem;
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin-left: 2px;
+    }
+    .simple-stat-pass {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+    }
+    .simple-stat-pass .simple-stat-pct {
+      background: #2563eb;
+      color: #ffffff;
+    }
+    .simple-stat-rej {
+      background: #faf5ff;
+      border-color: #f3e8ff;
+    }
+    .simple-stat-rej .simple-stat-pct {
+      background: #8b5cf6;
+      color: #ffffff;
+    }
+    .simple-stat-pending {
+      background: #f8fafc;
+      border-color: #e2e8f0;
+    }
+    .simple-stat-pending .simple-stat-pct {
+      background: #94a3b8;
+      color: #ffffff;
+    }
+
+    .simple-progress-bar {
+      display: flex;
+      height: 6px;
+      background: #f1f5f9;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 6px 0 4px 0;
+    }
+    .simple-bar-seg {
+      height: 100%;
+      transition: width 0.3s ease;
+    }
+    .simple-bar-seg.pass { background: #2563eb; }
+    .simple-bar-seg.rej { background: #8b5cf6; }
+    .simple-bar-seg.rem { background: #cbd5e1; }
+
+    .step-operator-meta {
+      font-size: 0.72rem;
+      color: #64748b;
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid #f1f5f9;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .step-meta-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .step-meta-item svg {
+      flex-shrink: 0;
+      color: #64748b;
+    }
+    .step-date-item {
+      margin-left: auto;
+    }
+
+    .slider-footer {
+      padding: 14px 22px;
+      background: #ffffff;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
     }
   </style>
 </head>
@@ -501,17 +1307,7 @@ if ($pdo) {
       <!-- Page Body -->
       <div class="content-body">
         
-        <!-- Top Action Bar (Refresh Only) -->
-        <div class="dash-action-bar">
-          <button type="button" class="btn-banner-link" id="refreshDashBtn" title="Refresh Live Data">
-            <svg id="refreshIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
-            </svg>
-            <span>Refresh</span>
-          </button>
-        </div>
-
-        <!-- KPI Row 5-Cards Grid -->
+        <!-- KPI Row 5-Cards Grid (Single Row Compact) -->
         <div class="kpi-row-grid">
           
           <!-- Card 1: Active WIP -->
@@ -529,7 +1325,7 @@ if ($pdo) {
             </div>
             <div class="kpi-box-val" id="valActiveWip"><?php echo $kpi['wip_active']; ?></div>
             <div class="kpi-box-foot">
-              <span>Total Issued: <strong id="valTotalIssuedQty"><?php echo number_format($kpi['wip_issued_qty']); ?> Units</strong></span>
+              <span>Issued: <strong id="valTotalIssuedQty"><?php echo number_format($kpi['wip_issued_qty']); ?> Units</strong></span>
               <span class="kpi-chip blue" id="valWipTotalCount"><?php echo $kpi['wip_total']; ?> Orders</span>
             </div>
           </div>
@@ -566,7 +1362,7 @@ if ($pdo) {
             </div>
             <div class="kpi-box-val" id="valProdRej"><?php echo number_format($kpi['prod_rejected']); ?></div>
             <div class="kpi-box-foot">
-              <span>Scrap Rate: <strong id="valRejRate"><?php echo $kpi['rejection_rate']; ?>%</strong></span>
+              <span>Scrap: <strong id="valRejRate"><?php echo $kpi['rejection_rate']; ?>%</strong></span>
               <span class="kpi-chip <?php echo ($kpi['rejection_rate'] > 10 ? 'red' : 'green'); ?>" id="valQualityPill">
                 <?php echo ($kpi['rejection_rate'] > 10 ? 'High Scrap' : 'Optimal Quality'); ?>
               </span>
@@ -583,9 +1379,9 @@ if ($pdo) {
                 </svg>
               </div>
             </div>
-            <div class="kpi-box-val" id="valRmStock"><?php echo number_format($kpi['rm_stock']); ?> <span style="font-size: 1rem; font-weight: 500; color: var(--dash-muted);">KG</span></div>
+            <div class="kpi-box-val" id="valRmStock"><?php echo number_format($kpi['rm_stock']); ?> <span>KG</span></div>
             <div class="kpi-box-foot">
-              <span>Active RM: <strong id="valRmCount"><?php echo $kpi['rm_count']; ?> Types</strong></span>
+              <span>Active: <strong id="valRmCount"><?php echo $kpi['rm_count']; ?> Types</strong></span>
               <span class="kpi-chip <?php echo ($kpi['rm_low_stock'] > 0 ? 'amber' : 'green'); ?>" id="valRmAlertPill">
                 <?php echo ($kpi['rm_low_stock'] > 0 ? $kpi['rm_low_stock'] . ' Low Stock' : 'Stock Healthy'); ?>
               </span>
@@ -604,13 +1400,138 @@ if ($pdo) {
                 </svg>
               </div>
             </div>
-            <div class="kpi-box-val" id="valFgStock"><?php echo number_format($kpi['fg_stock']); ?> <span style="font-size: 1rem; font-weight: 500; color: var(--dash-muted);">Units</span></div>
+            <div class="kpi-box-val" id="valFgStock"><?php echo number_format($kpi['fg_stock']); ?> <span>Units</span></div>
             <div class="kpi-box-foot">
               <span>Dispatched: <strong id="valDispatchedQty"><?php echo number_format($kpi['dispatch_qty']); ?> Units</strong></span>
               <a href="fg-store.php" class="kpi-chip blue" style="text-decoration: none;">View FG</a>
             </div>
           </div>
 
+        </div>
+
+        <!-- Live Operations: Shop Floor Production Parts (Running & Completed) -->
+        <div class="dash-table-box" id="runningPartsSection" style="border-top: 3px solid #2563eb;">
+          <div class="dash-table-bar" style="margin-bottom: 14px;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div class="kpi-icon-circ blue" style="width: 36px; height: 36px;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+              </div>
+              <div>
+                <h2 style="font-size: 1.05rem; font-weight: 700; margin: 0; color: var(--dash-dark); display: flex; align-items: center; gap: 8px;">
+                  Currently Running Parts
+                  <span class="live-pulse-badge" id="runningCountBadge">
+                    <span class="pulse-dot"></span>
+                    <span id="runningCountText"><?php echo $runningCount; ?> In Progress</span>
+                  </span>
+                </h2>
+              </div>
+            </div>
+
+            <!-- Search Box Parallel to Currently Running Parts Title -->
+            <div class="running-search-box">
+              <svg class="running-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <input type="text" id="runningPartsSearch" class="running-search-input" placeholder="Search running or completed parts by Name, Code, MIP No..." autocomplete="off">
+              <button type="button" id="runningSearchClear" class="running-search-clear" title="Clear Search" style="display: none;">&times;</button>
+            </div>
+          </div>
+
+          <div id="runningPartsContainer">
+            <?php if (!empty($runningParts)): ?>
+              <div class="running-parts-grid">
+                <?php foreach ($runningParts as $rp): 
+                    $targetQ = floatval($rp['target_qty']);
+                    $okQ = floatval($rp['ok_qty']);
+                    $rejQ = floatval($rp['rejected_qty']);
+                    $uom = htmlspecialchars($rp['uom'] ?? 'NOS');
+                    $partTitle = htmlspecialchars($rp['part_name'] ?: $rp['part_code']);
+                    $partCode = htmlspecialchars($rp['part_code'] ?? '');
+                    $custTitle = htmlspecialchars($rp['customer_name'] ?: '-');
+                    $mipNo = htmlspecialchars($rp['mip_no'] ?? '');
+                    $effectiveStatus = $rp['effective_status'] ?? 'In Progress';
+                    $isComp = ($effectiveStatus === 'Completed');
+                    $statusClass = $isComp ? 'completed' : 'in-progress';
+                    $searchKeywords = strtolower($partTitle . ' ' . $partCode . ' ' . $mipNo . ' ' . $custTitle . ' ' . ($rp['work_order'] ?? '') . ' ' . ($rp['so_number'] ?? ''));
+                ?>
+                <div class="running-card-item <?php echo $isComp ? 'is-completed' : 'is-running'; ?>"
+                     data-status="<?php echo $statusClass; ?>"
+                     data-search="<?php echo htmlspecialchars($searchKeywords); ?>"
+                     <?php if ($isComp) echo 'style="display: none;"'; ?>>
+                  <div class="running-card-info">
+                    <div class="running-part-head">
+                      <div class="running-part-title" title="<?php echo $partTitle; ?>"><?php echo $partTitle; ?></div>
+                      <?php if ($isComp): ?>
+                        <span class="running-status-pill comp">
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                          Completed
+                        </span>
+                      <?php else: ?>
+                        <span class="running-status-pill in-prog">
+                          <span class="pulse-dot-sm"></span>
+                          In Progress
+                        </span>
+                      <?php endif; ?>
+                    </div>
+                    <div class="running-part-meta">
+                      <?php if (!empty($mipNo) && $mipNo !== '-'): ?>
+                        <span class="running-part-mip"><strong><?php echo $mipNo; ?></strong></span>
+                      <?php endif; ?>
+                      <?php if (!empty($partCode)): ?>
+                        <span class="running-part-code" title="Part Code"><?php echo $partCode; ?></span>
+                      <?php endif; ?>
+                      <div class="running-part-cust" title="Customer">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                        <span><?php echo $custTitle; ?></span>
+                      </div>
+                      <div class="running-part-qty-pill <?php echo $isComp ? 'comp' : 'in-prog'; ?>" title="Production Quantity">
+                        <span><?php echo ($isComp ? 'Done: ' : 'OK: ') . $okQ . ' / ' . $targetQ . ' ' . $uom; ?></span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="running-card-actions">
+                    <button type="button" class="btn-view"
+                            data-id="<?php echo htmlspecialchars($rp['id']); ?>"
+                            data-mip_no="<?php echo htmlspecialchars($rp['mip_no'] ?? ''); ?>"
+                            data-part_name="<?php echo htmlspecialchars($rp['part_name'] ?: $rp['part_code']); ?>"
+                            data-part_code="<?php echo htmlspecialchars($rp['part_code']); ?>"
+                            data-customer_name="<?php echo htmlspecialchars($rp['customer_name'] ?? ''); ?>"
+                            data-target_qty="<?php echo htmlspecialchars($targetQ); ?>"
+                            data-ok_qty="<?php echo htmlspecialchars($okQ); ?>"
+                            data-rejected_qty="<?php echo htmlspecialchars($rejQ); ?>"
+                            data-uom="<?php echo $uom; ?>"
+                            data-status="<?php echo htmlspecialchars($effectiveStatus); ?>"
+                            data-created_at="<?php echo htmlspecialchars($rp['entry_date'] ?? $rp['created_at'] ?? ''); ?>"
+                            title="View Process Breakdown">
+                      View
+                    </button>
+                  </div>
+                </div>
+                <?php endforeach; ?>
+              </div>
+              <div id="runningNoResults" class="running-empty-state" style="display: none;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 36px; height: 36px; color: #94a3b8; margin-bottom: 6px;">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <div style="font-size: 0.90rem; font-weight: 700; color: var(--dash-dark);">No matching parts found</div>
+                <div style="font-size: 0.78rem; color: var(--dash-muted); margin-top: 2px;">Try searching with another keyword or MIP number.</div>
+                <button type="button" class="btn-clear-search-link" id="btnResetRunningSearch">Clear Search</button>
+              </div>
+            <?php else: ?>
+              <div class="running-empty-state">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 36px; height: 36px; color: #10b981; margin-bottom: 6px;">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                  <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+                <div style="font-size: 0.90rem; font-weight: 700; color: var(--dash-dark);">No Production Parts Found</div>
+                <div style="font-size: 0.78rem; color: var(--dash-muted); margin-top: 2px;">There are no active or completed shop floor production runs.</div>
+              </div>
+            <?php endif; ?>
+          </div>
         </div>
 
         <!-- Viz Row 1: Shift Performance & Quality Donut -->
@@ -774,122 +1695,7 @@ if ($pdo) {
 
         </div>
 
-        <!-- Viz Row 2: Process Output & Warehouse Inventory Health -->
-        <div class="viz-grid-equal">
-          
-          <!-- Process / Workcenter Production Output -->
-          <div class="viz-card">
-            <div class="viz-card-head">
-              <div>
-                <h3 class="viz-card-title">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="3"></circle>
-                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-                  </svg>
-                  Process / Workcenter Production Output
-                </h3>
-                <p class="viz-card-sub">Units completed per manufacturing department</p>
-              </div>
-            </div>
 
-            <div style="display: flex; flex-direction: column; gap: 6px;" id="processListContainer">
-              <?php
-              $procList = !empty($processes) ? $processes : [
-                  ['process_name' => 'FLOOR1 (Assembly)', 'ok_qty' => $kpi['prod_ok']]
-              ];
-              $maxP = 1;
-              foreach ($procList as $p) {
-                  if (floatval($p['ok_qty']) > $maxP) $maxP = floatval($p['ok_qty']);
-              }
-              foreach ($procList as $p):
-                  $pQty = floatval($p['ok_qty']);
-                  $pPct = $maxP > 0 ? round(($pQty / $maxP) * 100) : 0;
-              ?>
-              <div class="proc-row-item">
-                <div class="proc-info">
-                  <span><?php echo htmlspecialchars($p['process_name']); ?></span>
-                  <span style="color: var(--dash-primary); font-weight: 700;"><?php echo number_format($pQty); ?> Units</span>
-                </div>
-                <div class="proc-bar-track">
-                  <div class="proc-bar-fill" style="width: <?php echo max(5, $pPct); ?>%;"></div>
-                </div>
-              </div>
-              <?php endforeach; ?>
-            </div>
-          </div>
-
-          <!-- Top Component Stocks (RM & Child Parts) -->
-          <div class="viz-card">
-            <div class="viz-card-head">
-              <div>
-                <h3 class="viz-card-title">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-                    <polyline points="2 17 12 22 22 17"></polyline>
-                    <polyline points="2 12 12 17 22 12"></polyline>
-                  </svg>
-                  Top Component Stocks (Warehouse)
-                </h3>
-                <p class="viz-card-sub">Current available stock levels & low stock alerts</p>
-              </div>
-            </div>
-
-            <div style="display: flex; flex-direction: column; gap: 8px;" id="stockListContainer">
-              <?php
-              // RM Top
-              foreach (array_slice($topRm, 0, 2) as $rm):
-                  $isLow = floatval($rm['current_stock']) <= 5;
-              ?>
-              <div class="comp-stock-item">
-                <div>
-                  <div style="display: flex; align-items: center; gap: 6px;">
-                    <span style="font-size: 0.7rem; font-weight: 700; background: #fffbeb; color: #b45309; padding: 2px 6px; border-radius: 4px;">RAW MATERIAL</span>
-                    <strong style="font-size: 0.86rem;"><?php echo htmlspecialchars($rm['rm_name']); ?></strong>
-                  </div>
-                  <span style="font-size: 0.74rem; color: var(--dash-muted); font-family: monospace;"><?php echo htmlspecialchars($rm['rm_code']); ?></span>
-                </div>
-                <div style="text-align: right;">
-                  <div style="font-size: 0.92rem; font-weight: 800; <?php echo ($isLow ? 'color: #dc2626;' : ''); ?>">
-                    <?php echo number_format(floatval($rm['current_stock'])); ?> <span style="font-size: 0.74rem; color: var(--dash-muted);"><?php echo htmlspecialchars($rm['uom']); ?></span>
-                  </div>
-                  <?php if ($isLow): ?>
-                  <span style="font-size: 0.7rem; color: #dc2626; font-weight: 700;">Low Stock</span>
-                  <?php else: ?>
-                  <span style="font-size: 0.7rem; color: #059669; font-weight: 700;">Healthy</span>
-                  <?php endif; ?>
-                </div>
-              </div>
-              <?php endforeach; ?>
-
-              <?php
-              // Child Parts Top
-              foreach (array_slice($topCp, 0, 2) as $cp):
-                  $isLow = floatval($cp['current_stock']) <= 5;
-              ?>
-              <div class="comp-stock-item">
-                <div>
-                  <div style="display: flex; align-items: center; gap: 6px;">
-                    <span style="font-size: 0.7rem; font-weight: 700; background: #eff6ff; color: #1d4ed8; padding: 2px 6px; border-radius: 4px;">RM & CHILD PART</span>
-                    <strong style="font-size: 0.86rem;"><?php echo htmlspecialchars($cp['part_name']); ?></strong>
-                  </div>
-                  <span style="font-size: 0.74rem; color: var(--dash-muted); font-family: monospace;"><?php echo htmlspecialchars($cp['part_code']); ?></span>
-                </div>
-                <div style="text-align: right;">
-                  <div style="font-size: 0.92rem; font-weight: 800; <?php echo ($isLow ? 'color: #dc2626;' : ''); ?>">
-                    <?php echo number_format(floatval($cp['current_stock'])); ?> <span style="font-size: 0.74rem; color: var(--dash-muted);"><?php echo htmlspecialchars($cp['uom']); ?></span>
-                  </div>
-                  <?php if ($isLow): ?>
-                  <span style="font-size: 0.7rem; color: #dc2626; font-weight: 700;">Low Stock</span>
-                  <?php else: ?>
-                  <span style="font-size: 0.7rem; color: #059669; font-weight: 700;">Healthy</span>
-                  <?php endif; ?>
-                </div>
-              </div>
-              <?php endforeach; ?>
-            </div>
-          </div>
-
-        </div>
 
         <!-- Live Operations: Shop Floor Production Logs Table -->
         <div class="dash-table-box">
@@ -926,7 +1732,7 @@ if ($pdo) {
                       $target = floatval($r['target_qty']);
                       $ok = floatval($r['ok_qty']);
                       $rej = floatval($r['rejected_qty']);
-                      $isCompleted = strtolower($r['status']) === 'completed';
+                      $isCompleted = ($target > 0 && ($ok + $rej) >= $target) || ($target == 0 && strtolower($r['status'] ?? '') === 'completed');
                   ?>
                   <tr>
                     <td>
@@ -947,7 +1753,7 @@ if ($pdo) {
                     <td><?php echo htmlspecialchars($r['operator_name'] ?? '-'); ?></td>
                     <td>
                       <span class="badge-status <?php echo ($isCompleted ? 'completed' : 'in-progress'); ?>">
-                        <?php echo htmlspecialchars($r['status'] ?? 'Completed'); ?>
+                        <?php echo $isCompleted ? 'Completed' : 'In Progress'; ?>
                       </span>
                     </td>
                     <td style="font-size: 0.76rem; color: var(--dash-muted);"><?php echo htmlspecialchars($r['created_at'] ?? '-'); ?></td>
@@ -969,6 +1775,67 @@ if ($pdo) {
 
     </div>
 
+  </div>
+
+  <!-- =========================================================
+       Right Slide-in Process Workflow Drawer / Slider (Half Screen)
+       ========================================================= -->
+  <div id="processTimelineSliderOverlay" class="slider-overlay"></div>
+
+  <div id="processTimelineSlider" class="slider-drawer">
+    <!-- Slider Header: Target Qty, Finished Goods (FG), Total Rejections Only -->
+    <div class="slider-header">
+      <div class="slider-header-wrap">
+        <div class="slider-summary-grid">
+          <div class="slider-stat-card stat-card-target">
+            <div class="slider-stat-lbl">Target Qty</div>
+            <div class="slider-stat-val" id="sldStatTarget">0 NOS</div>
+          </div>
+          <div class="slider-stat-card stat-card-fg">
+            <div class="slider-stat-lbl">Finished Goods (FG)</div>
+            <div class="slider-stat-val val-fg" id="sldStatPassed">0 NOS</div>
+          </div>
+          <div class="slider-stat-card stat-card-rej">
+            <div class="slider-stat-lbl">Total Rejections</div>
+            <div class="slider-stat-val val-rej" id="sldStatRejected">0 NOS</div>
+          </div>
+        </div>
+        <button type="button" class="slider-close-btn" id="btnCloseSlider" title="Close">&times;</button>
+      </div>
+    </div>
+
+    <!-- Slider Sub-Header with MIP, Part, and Entry Date -->
+    <div class="slider-meta-bar" id="sldMetaBar" style="padding: 8px 18px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; font-size: 0.78rem; color: #64748b; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+      <div>MIP: <strong style="color: #0f172a;" id="sldMetaMip">-</strong> &bull; <span id="sldMetaPart" style="font-weight: 600; color: #334155;">-</span></div>
+      <div style="display: flex; align-items: center; gap: 4px;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+        <span>Entry Date: <strong style="color: #0f172a;" id="sldMetaDate">-</strong></span>
+      </div>
+    </div>
+
+    <!-- Slider Body: Vertical Line Timeline -->
+    <div class="slider-body" id="sldTimelineBody">
+      <div class="timeline-wrap">
+        <div class="timeline-track-line"></div>
+        <div id="sldTimelineStepsContainer">
+          <!-- Populated dynamically via JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Slider Footer -->
+    <div class="slider-footer">
+      <div style="font-size: 0.8rem; color: var(--dash-muted);" id="sldFooterMeta">
+        Shop Floor Live Stage Progress
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button type="button" class="btn-banner-link" id="btnCloseSliderFooter">Close</button>
+        <a href="#" id="btnSliderOpenWorkflow" class="btn-banner-link primary-btn" style="text-decoration: none; padding: 7px 16px; font-size: 0.82rem; display: inline-flex; align-items: center; gap: 6px;">
+          <span>Open Full Process Workspace</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14"></path><polyline points="12 5 19 12 12 19"></polyline></svg>
+        </a>
+      </div>
+    </div>
   </div>
 
   <!-- Dashboard JavaScript Controller with cache-busting -->

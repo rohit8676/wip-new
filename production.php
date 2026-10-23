@@ -1074,7 +1074,21 @@ if (!function_exists('getPartProcessesList')) {
       border-top: 1px solid #f1f5f9;
       display: flex;
       align-items: center;
-      gap: 5px;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .step-meta-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .step-meta-item svg {
+      flex-shrink: 0;
+      color: #64748b;
+    }
+    .step-date-item {
+      margin-left: auto;
     }
 
     /* Percentage Breakdown Pill Row */
@@ -1309,7 +1323,10 @@ if (!function_exists('getPartProcessesList')) {
                       <td style="text-align: center; white-space: nowrap;">
                         <?php 
                           $rowStatus = trim($item['status'] ?? 'In Progress');
-                          $isComplete = (strcasecmp($rowStatus, 'Completed') === 0 || strcasecmp($rowStatus, 'Complete') === 0);
+                          $targetQ = floatval($item['target_qty'] ?? 0);
+                          $okQ = floatval($item['ok_qty'] ?? 0);
+                          $rejQ = floatval($item['rejected_qty'] ?? 0);
+                          $isComplete = ($targetQ > 0 && ($okQ + $rejQ) >= $targetQ) || ($targetQ == 0 && (strcasecmp($rowStatus, 'Completed') === 0 || strcasecmp($rowStatus, 'Complete') === 0));
                         ?>
                         <?php if ($isComplete): ?>
                           <span class="tag tag-completed" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0;">
@@ -1509,6 +1526,15 @@ if (!function_exists('getPartProcessesList')) {
       </div>
     </div>
 
+    <!-- Slider Sub-Header with MIP, Part, and Entry Date -->
+    <div class="slider-meta-bar" id="sldMetaBar" style="padding: 8px 18px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; font-size: 0.78rem; color: #64748b; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+      <div>MIP: <strong style="color: #0f172a;" id="sldMetaMip">-</strong> &bull; <span id="sldMetaPart" style="font-weight: 600; color: #334155;">-</span></div>
+      <div style="display: flex; align-items: center; gap: 4px;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+        <span>Entry Date: <strong style="color: #0f172a;" id="sldMetaDate">-</strong></span>
+      </div>
+    </div>
+
     <!-- Slider Body: Vertical Line Timeline -->
     <div class="slider-body" id="sldTimelineBody">
       <div class="timeline-wrap">
@@ -1568,7 +1594,7 @@ if (!function_exists('getPartProcessesList')) {
 
     function formatDateDMY(dStr) {
       if (!dStr) return '';
-      const clean = dStr.toString().split('T')[0];
+      const clean = dStr.toString().trim().split('T')[0].split(' ')[0];
       const p = clean.split('-');
       if (p.length === 3 && p[0].length === 4) {
         return `${p[2]}-${p[1]}-${p[0]}`;
@@ -1710,7 +1736,10 @@ if (!function_exists('getPartProcessesList')) {
         const createDateStr = data.created_at ? formatDateDMY(data.created_at) : formatDateDMY(new Date().toISOString());
         const partStages = getPartStagesForJs(data.part_code);
 
-        const isRowComplete = (data.status === 'Completed' || data.status === 'Complete');
+        const tgt = parseFloat(data.target_qty || 0);
+        const ok = parseFloat(data.ok_qty || 0);
+        const rej = parseFloat(data.rejected_qty || 0);
+        const isRowComplete = (tgt > 0 && (ok + rej) >= tgt) || (tgt === 0 && (data.status === 'Completed' || data.status === 'Complete'));
         const statusBadgeHtml = isRowComplete
           ? `<span class="tag tag-completed" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0;"><span style="width: 6px; height: 6px; border-radius: 50%; background: #16a34a;"></span>Complete</span>`
           : `<span class="tag tag-in-progress" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;"><span style="width: 6px; height: 6px; border-radius: 50%; background: #2563eb;"></span>Progress</span>`;
@@ -1918,6 +1947,14 @@ if (!function_exists('getPartProcessesList')) {
         if (elStatPassed) elStatPassed.textContent = `-`;
         if (elStatRejected) elStatRejected.textContent = `-`;
 
+        // Update Slider Sub-Header Meta
+        const elMetaMip = document.getElementById('sldMetaMip');
+        const elMetaPart = document.getElementById('sldMetaPart');
+        const elMetaDate = document.getElementById('sldMetaDate');
+        if (elMetaMip) elMetaMip.textContent = mip || '-';
+        if (elMetaPart) elMetaPart.textContent = `${rowData.partCode || ''} ${rowData.partName ? '- ' + rowData.partName : ''}`.trim() || partName;
+        if (elMetaDate) elMetaDate.textContent = rowData.createdAt ? formatDateDMY(rowData.createdAt) : '-';
+
         // Direct link to process.php
         const openWfBtn = document.getElementById('btnSliderOpenWorkflow');
         if (openWfBtn) {
@@ -1947,6 +1984,10 @@ if (!function_exists('getPartProcessesList')) {
         try {
           const res = await fetch(`api/process_stage.php?entry_id=${encodeURIComponent(id)}&mip_no=${encodeURIComponent(mip)}`);
           const resJson = await res.json();
+
+          if (resJson.entry && resJson.entry.created_at_formatted && elMetaDate) {
+            elMetaDate.textContent = resJson.entry.created_at_formatted;
+          }
 
           if (resJson.success && Array.isArray(resJson.stages) && resJson.stages.length > 0) {
             renderProcessTimelineSteps(resJson.stages, resJson.overall, uom);
@@ -2140,10 +2181,20 @@ if (!function_exists('getPartProcessesList')) {
                 <div class="simple-bar-seg rem" style="width: ${remPct}%;"></div>
               </div>
 
-              ${st.operator ? `
+              ${(st.operator || st.date_formatted || st.date) ? `
                 <div class="step-operator-meta">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                  <span>Operator: <strong>${escapeHtml(st.operator)}</strong></span>
+                  ${st.operator ? `
+                    <div class="step-meta-item">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                      <span>Operator: <strong>${escapeHtml(st.operator)}</strong></span>
+                    </div>
+                  ` : '<div></div>'}
+                  ${(st.date_formatted || st.date) ? `
+                    <div class="step-meta-item step-date-item" title="${escapeHtml(st.date || '')}">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                      <span>Date: <strong>${escapeHtml(st.date_formatted || formatDateDMY(st.date))}</strong>${st.time_formatted ? ` <span style="color: #94a3b8; font-weight: normal; font-size: 0.68rem;">(${escapeHtml(st.time_formatted)})</span>` : ''}</span>
+                    </div>
+                  ` : ''}
                 </div>
               ` : ''}
             </div>

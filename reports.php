@@ -7,6 +7,23 @@ requirePermission('reports', 'read');
 
 $pageTitle = 'Reports & Analytics';
 $pdo = getDBConnection();
+
+$customersList = [];
+if ($pdo) {
+    try {
+        $stmtCust = $pdo->query("
+            SELECT DISTINCT customer_name FROM customer_master WHERE customer_name IS NOT NULL AND customer_name != ''
+            UNION
+            SELECT DISTINCT customer_name FROM production_entry WHERE customer_name IS NOT NULL AND customer_name != ''
+            UNION
+            SELECT DISTINCT customer_name FROM material_issue WHERE customer_name IS NOT NULL AND customer_name != ''
+            UNION
+            SELECT DISTINCT customer FROM fg_dispatch_logs WHERE customer IS NOT NULL AND customer != ''
+            ORDER BY customer_name ASC
+        ");
+        $customersList = $stmtCust->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Exception $e) {}
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -697,6 +714,7 @@ $pdo = getDBConnection();
           <div class="print-meta-grid">
             <div><strong>Report Type:</strong> <span id="printReportTypeLabel">Daily Production Report (DPR)</span></div>
             <div><strong>Filter Period:</strong> <span id="printDateRangeLabel">All Dates</span></div>
+            <div id="printCustomerMetaWrap"><strong>Customer:</strong> <span id="printCustomerLabel">All Customers</span></div>
             <div><strong>Total Records:</strong> <span id="printTotalRecordsLabel">Loading...</span></div>
             <div><strong>Printed On:</strong> <span id="printGeneratedOnLabel"><?php echo date('d-m-Y H:i:s'); ?></span></div>
             <div><strong>Printed By:</strong> <span><?php echo htmlspecialchars($currentUser['name'] ?? 'Administrator'); ?> (<?php echo htmlspecialchars($currentUser['role'] ?? 'Admin'); ?>)</span></div>
@@ -748,6 +766,17 @@ $pdo = getDBConnection();
             <div class="filter-field">
               <label class="filter-label" for="toDate">To Date</label>
               <input type="date" id="toDate" class="filter-input">
+            </div>
+
+            <!-- Customer Filter Dropdown -->
+            <div class="filter-field" id="customerFilterField">
+              <label class="filter-label" for="customerFilter">Customer</label>
+              <select id="customerFilter" class="filter-input" onchange="loadReportData();">
+                <option value="">All Customers</option>
+                <?php foreach ($customersList as $cust): ?>
+                  <option value="<?php echo htmlspecialchars($cust); ?>"><?php echo htmlspecialchars($cust); ?></option>
+                <?php endforeach; ?>
+              </select>
             </div>
 
             <!-- Search Keyword -->
@@ -858,6 +887,8 @@ $pdo = getDBConnection();
       const reportTypeSelect = document.getElementById('reportType');
       const fromDateInput = document.getElementById('fromDate');
       const toDateInput = document.getElementById('toDate');
+      const customerSelect = document.getElementById('customerFilter');
+      const customerFilterField = document.getElementById('customerFilterField');
       const searchInput = document.getElementById('searchKeyword');
       const resetBtn = document.getElementById('resetFiltersBtn');
       const downloadExcelBtn = document.getElementById('downloadExcelBtn');
@@ -907,6 +938,7 @@ $pdo = getDBConnection();
       // Reset Button
       resetBtn.addEventListener('click', () => {
         searchInput.value = '';
+        if (customerSelect) customerSelect.value = '';
         setQuickDate('all');
         quickDateBtns.forEach(b => b.classList.remove('active'));
         document.querySelector('[data-range="all"]').classList.add('active');
@@ -928,6 +960,12 @@ $pdo = getDBConnection();
         const t = toDateInput.value;
         const pRange = document.getElementById('printDateRangeLabel');
         if (pRange) pRange.textContent = (f || t) ? `From: ${f || 'Start'} To: ${t || 'Present'}` : 'All Dates (Full History)';
+
+        const pCust = document.getElementById('printCustomerLabel');
+        if (pCust) {
+          const custVal = (customerSelect && customerFilterField && customerFilterField.style.display !== 'none') ? customerSelect.value.trim() : '';
+          pCust.textContent = custVal ? custVal : 'All Customers';
+        }
 
         const pGen = document.getElementById('printGeneratedOnLabel');
         if (pGen) {
@@ -953,15 +991,28 @@ $pdo = getDBConnection();
 
       if (printReportBtn) printReportBtn.addEventListener('click', triggerPrint);
 
+      function updateCustomerFilterVisibility() {
+        const type = reportTypeSelect.value;
+        if (customerFilterField) {
+          if (type === 'production' || type === 'mip' || type === 'fg_dispatch') {
+            customerFilterField.style.display = '';
+          } else {
+            customerFilterField.style.display = 'none';
+          }
+        }
+      }
+
       // Load Report Data Function
       window.loadReportData = async function() {
+        updateCustomerFilterVisibility();
         const type = reportTypeSelect.value;
         const from = fromDateInput.value;
         const to = toDateInput.value;
+        const customer = (customerSelect && customerFilterField && customerFilterField.style.display !== 'none') ? customerSelect.value.trim() : '';
         const q = searchInput.value.trim();
 
         // Update Excel Download Link
-        const exportUrl = `api/reports.php?report_type=${encodeURIComponent(type)}&from_date=${encodeURIComponent(from)}&to_date=${encodeURIComponent(to)}&search=${encodeURIComponent(q)}&export=excel`;
+        const exportUrl = `api/reports.php?report_type=${encodeURIComponent(type)}&from_date=${encodeURIComponent(from)}&to_date=${encodeURIComponent(to)}&customer=${encodeURIComponent(customer)}&search=${encodeURIComponent(q)}&export=excel`;
         downloadExcelBtn.setAttribute('href', exportUrl);
 
         // Update title badge safely
@@ -975,7 +1026,7 @@ $pdo = getDBConnection();
         tbody.innerHTML = `<tr><td colspan="12" style="text-align: center; padding: 28px; color: var(--rep-muted);">Loading report data...</td></tr>`;
 
         try {
-          const fetchUrl = `api/reports.php?report_type=${encodeURIComponent(type)}&from_date=${encodeURIComponent(from)}&to_date=${encodeURIComponent(to)}&search=${encodeURIComponent(q)}`;
+          const fetchUrl = `api/reports.php?report_type=${encodeURIComponent(type)}&from_date=${encodeURIComponent(from)}&to_date=${encodeURIComponent(to)}&customer=${encodeURIComponent(customer)}&search=${encodeURIComponent(q)}`;
           const res = await fetch(fetchUrl);
           const data = await res.json();
 
@@ -996,7 +1047,9 @@ $pdo = getDBConnection();
           // 4. Update Result Counter safely preserving currentReportName element
           const resultInfoEl = document.getElementById('reportResultInfo');
           if (resultInfoEl) {
-            resultInfoEl.innerHTML = `Showing report data for <strong id="currentReportName">${escapeHtml(selText)}</strong> (Found <strong>${data.count}</strong> records${from || to ? ` | From: ${from || 'Start'} To: ${to || 'Present'}` : ''})`;
+            const dateStr = (from || to) ? ` | Period: ${from || 'Start'} to ${to || 'Present'}` : '';
+            const custStr = customer ? ` | Customer: <strong>${escapeHtml(customer)}</strong>` : '';
+            resultInfoEl.innerHTML = `Showing report data for <strong id="currentReportName">${escapeHtml(selText)}</strong> (Found <strong>${data.count}</strong> records${dateStr}${custStr})`;
           }
 
         } catch (err) {

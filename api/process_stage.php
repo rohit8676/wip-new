@@ -149,6 +149,26 @@ if ($method === 'GET') {
             $cumRej = $savedLog ? floatval($savedLog['rejected_qty'] ?? 0) : 0;
             $operator = $savedLog['operator_name'] ?? '';
 
+            // Extract stage execution/update date
+            $stageDate = null;
+            $stageDateFormatted = '';
+            $stageTimeFormatted = '';
+            if ($savedLog) {
+                $rawDate = !empty($savedLog['updated_at']) ? $savedLog['updated_at'] : (!empty($savedLog['created_at']) ? $savedLog['created_at'] : null);
+                if ($rawDate instanceof DateTimeInterface) {
+                    $stageDate = $rawDate->format('Y-m-d H:i:s');
+                } elseif (!empty($rawDate)) {
+                    $stageDate = strval($rawDate);
+                }
+                if ($stageDate) {
+                    $ts = strtotime($stageDate);
+                    if ($ts) {
+                        $stageDateFormatted = date('d-m-Y', $ts);
+                        $stageTimeFormatted = date('h:i A', $ts);
+                    }
+                }
+            }
+
             $stageInput = ($idx === 0) ? $targetQty : $runningInput;
             $stageAvail = max(0, $stageInput - ($cumPass + $cumRej));
 
@@ -188,6 +208,11 @@ if ($method === 'GET') {
                 'rem_percent' => $remPct,
                 'status' => $stageStatus,
                 'operator' => $operator,
+                'date' => $stageDate,
+                'date_formatted' => $stageDateFormatted,
+                'time_formatted' => $stageTimeFormatted,
+                'created_at' => !empty($savedLog['created_at']) ? (is_a($savedLog['created_at'], 'DateTimeInterface') ? $savedLog['created_at']->format('Y-m-d H:i:s') : strval($savedLog['created_at'])) : null,
+                'updated_at' => !empty($savedLog['updated_at']) ? (is_a($savedLog['updated_at'], 'DateTimeInterface') ? $savedLog['updated_at']->format('Y-m-d H:i:s') : strval($savedLog['updated_at'])) : null,
                 'is_final' => $isFinal,
                 'variant_code' => $savedLog['variant_code'] ?? '',
                 'variant_name' => $savedLog['variant_name'] ?? ''
@@ -195,6 +220,12 @@ if ($method === 'GET') {
         }
 
         $overallCompletion = ($targetQty > 0) ? round(($finalFgQty / $targetQty) * 100, 1) : 0;
+
+        $createdAtFormatted = '';
+        if (!empty($createdAt)) {
+            $cTs = strtotime(is_a($createdAt, 'DateTimeInterface') ? $createdAt->format('Y-m-d H:i:s') : strval($createdAt));
+            if ($cTs) $createdAtFormatted = date('d-m-Y', $cTs);
+        }
 
         echo json_encode([
             'success' => true,
@@ -209,6 +240,7 @@ if ($method === 'GET') {
                 'target_qty' => $targetQty,
                 'uom' => $uom,
                 'created_at' => $createdAt,
+                'created_at_formatted' => $createdAtFormatted,
                 'status' => $entryStatus
             ],
             'overall' => [
@@ -355,9 +387,12 @@ if ($method === 'POST') {
                 $finalOkQty = 0;
                 if ($finalOk !== false && $finalOk !== null) {
                     $finalOkQty = floatval($finalOk);
-                    if ((($finalOkQty + $totalRej) >= $targetQty && $targetQty > 0) || ($isFinal && $finalOkQty > 0)) {
-                        $status = 'Completed';
-                    }
+                }
+                // Order is ONLY completed when all target pieces are finished or rejected (FG OK + Rejections >= Target Qty)
+                if ($targetQty > 0 && ($finalOkQty + $totalRej) >= $targetQty) {
+                    $status = 'Completed';
+                } else {
+                    $status = 'In Progress';
                 }
 
                 $stEntryUpd = $pdo->prepare("
@@ -499,9 +534,25 @@ if ($method === 'POST') {
                 $targetQtyStmt->execute([$entryId]);
                 $targetQty = floatval($targetQtyStmt->fetchColumn() ?: 0);
 
+                // Fetch accurate total rejections from all stages in this entry
+                $stSumRej = $pdo->prepare("SELECT SUM(rejected_qty) as total_rej FROM production_stage_log WHERE production_entry_id = ?");
+                $stSumRej->execute([$entryId]);
+                $totalRej = floatval($stSumRej->fetchColumn() ?: 0);
+
+                // Fetch final stage ok qty
+                $stFinal = $pdo->prepare("SELECT processed_qty FROM production_stage_log WHERE production_entry_id = ? AND is_final_stage = 1");
+                $stFinal->execute([$entryId]);
+                $finalOkDb = $stFinal->fetchColumn();
+                if ($finalOkDb !== false && $finalOkDb !== null) {
+                    $finalOkQty = floatval($finalOkDb);
+                }
+
+                // Order is ONLY completed when all target pieces are finished or rejected (FG OK + Rejections >= Target Qty)
                 $status = 'In Progress';
-                if ((($finalOkQty + $totalRej) >= $targetQty && $targetQty > 0) || ($finalOkQty > 0)) {
+                if ($targetQty > 0 && ($finalOkQty + $totalRej) >= $targetQty) {
                     $status = 'Completed';
+                } else {
+                    $status = 'In Progress';
                 }
 
                 $stEntryUpd = $pdo->prepare("

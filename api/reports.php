@@ -27,6 +27,7 @@ if (!$pdo) {
 $reportType = trim($_GET['report_type'] ?? 'production');
 $fromDate   = trim($_GET['from_date'] ?? '');
 $toDate     = trim($_GET['to_date'] ?? '');
+$customer   = trim($_GET['customer'] ?? '');
 $search     = trim($_GET['search'] ?? '');
 $export     = trim($_GET['export'] ?? ''); // 'csv' or 'excel' or empty (JSON)
 
@@ -53,6 +54,10 @@ try {
         if (!empty($toDate)) {
             $where[] = "CAST(created_at AS DATE) <= ?";
             $params[] = $toDate;
+        }
+        if (!empty($customer)) {
+            $where[] = "customer_name = ?";
+            $params[] = $customer;
         }
         if (!empty($search)) {
             $where[] = "(mip_no LIKE ? OR customer_name LIKE ? OR so_number LIKE ? OR part_code LIKE ? OR part_name LIKE ? OR operator_name LIKE ? OR process_name LIKE ?)";
@@ -121,6 +126,10 @@ try {
         if (!empty($toDate)) {
             $where[] = "issue_date <= ?";
             $params[] = $toDate;
+        }
+        if (!empty($customer)) {
+            $where[] = "customer_name = ?";
+            $params[] = $customer;
         }
         if (!empty($search)) {
             $where[] = "(issue_no LIKE ? OR customer_name LIKE ? OR customer_code LIKE ? OR so_number LIKE ? OR part_code LIKE ? OR part_name LIKE ? OR received_by LIKE ?)";
@@ -285,6 +294,10 @@ try {
             $where[] = "dispatch_date <= ?";
             $params[] = $toDate;
         }
+        if (!empty($customer)) {
+            $where[] = "customer = ?";
+            $params[] = $customer;
+        }
         if (!empty($search)) {
             $where[] = "(dispatch_no LIKE ? OR invoice_ref LIKE ? OR part_code LIKE ? OR part_name LIKE ? OR customer LIKE ? OR batch_no LIKE ?)";
             $term = "%{$search}%";
@@ -398,6 +411,9 @@ try {
         if (!empty($fromDate) || !empty($toDate)) {
             fputcsv($out, ["Date Range Filter", ($fromDate ?: 'Start') . " to " . ($toDate ?: 'Present')]);
         }
+        if (!empty($customer)) {
+            fputcsv($out, ["Customer Filter", $customer]);
+        }
         fputcsv($out, []); // Blank separator
 
         // Column Titles
@@ -427,6 +443,7 @@ try {
         'report_type' => $reportType,
         'from_date' => $fromDate,
         'to_date' => $toDate,
+        'customer' => $customer,
         'count' => count($rows),
         'columns' => $columns,
         'rows' => $rows,
