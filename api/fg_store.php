@@ -37,9 +37,12 @@ try {
                 last_production_date DATE NULL,
                 variant_stock_details NVARCHAR(MAX) NULL,
                 created_at DATETIME DEFAULT GETDATE(),
-                updated_at DATETIME DEFAULT GETDATE(),
-                CONSTRAINT UQ_fg_inv_part_code UNIQUE (part_code)
+                updated_at DATETIME DEFAULT GETDATE()
             );
+        END
+        IF EXISTS (SELECT * FROM sys.key_constraints WHERE name = 'UQ_fg_inv_part_code')
+        BEGIN
+            ALTER TABLE fg_inventory DROP CONSTRAINT UQ_fg_inv_part_code;
         END
         ELSE
         BEGIN
@@ -172,13 +175,14 @@ if ($method === 'GET') {
         }
         // Default: FG Inventory
         else {
+            syncFgInventoryRecords($pdo);
             $stmt = $pdo->query("
                 SELECT id, part_code, part_name, customer_name, total_ok_qty, uom, 
                        last_mip_no, variant_stock_details,
                        CONVERT(VARCHAR(10), last_production_date, 120) as production_date,
                        CONVERT(VARCHAR(19), updated_at, 120) as updated_at
                 FROM fg_inventory
-                ORDER BY part_code ASC
+                ORDER BY id DESC
             ");
             $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }

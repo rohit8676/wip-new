@@ -193,6 +193,7 @@ if ($pdo) {
                    target_qty, ok_qty, rejected_qty,
                    operator_name, uom, status,
                    is_rework, entry_type, rework_qty, rework_source_entry_id,
+                   rework_iteration, rework_label,
                    CONVERT(VARCHAR(10), created_at, 120) as entry_date,
                    CONVERT(VARCHAR(19), created_at, 120) as created_at
             FROM production_entry
@@ -204,9 +205,9 @@ if ($pdo) {
 
         foreach ($productionList as $item) {
             $totalProducedOk += floatval($item['ok_qty'] ?? 0);
-            if (empty($item['is_rework'])) {
-                $totalRejections += floatval($item['rejected_qty'] ?? 0);
-            }
+            $rwVal = floatval($item['rework_qty'] ?? 0);
+            $rejVal = floatval($item['rejected_qty'] ?? 0);
+            $totalRejections += ($rwVal > 0 ? $rwVal : $rejVal);
             if (($item['entry_date'] ?? '') === $todaySqlDate) {
                 $todayOutput += floatval($item['ok_qty'] ?? 0);
             }
@@ -1276,6 +1277,7 @@ if (!function_exists('getPartProcessesList')) {
                   <th style="white-space: nowrap;">Part Name</th>
                   <th style="text-align: center; white-space: nowrap;">Target Qty</th>
                   <th style="text-align: center; white-space: nowrap;">OK Qty</th>
+                  <th style="text-align: center; white-space: nowrap;">Rework Qty</th>
                   <th style="text-align: center; white-space: nowrap;">Status</th>
                   <th style="text-align: center; white-space: nowrap;">Action</th>
                 </tr>
@@ -1283,7 +1285,7 @@ if (!function_exists('getPartProcessesList')) {
               <tbody id="prdTableBody">
                 <?php if (empty($productionList)): ?>
                   <tr id="emptyTableRow">
-                    <td colspan="9" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
+                    <td colspan="10" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
                       No production entries found. Click <strong>+ Log Production</strong> to record shop-floor output.
                     </td>
                   </tr>
@@ -1306,6 +1308,7 @@ if (!function_exists('getPartProcessesList')) {
                         data-rejected_qty="<?php echo htmlspecialchars($item['rejected_qty'] ?? 0); ?>"
                         data-rework_qty="<?php echo htmlspecialchars($item['rework_qty'] ?? 0); ?>"
                         data-is_rework="<?php echo !empty($item['is_rework']) ? '1' : '0'; ?>"
+                        data-rework_label="<?php echo htmlspecialchars(!empty($item['rework_label']) ? $item['rework_label'] : (!empty($item['is_rework']) ? 'R' : '')); ?>"
                         data-operator_name="<?php echo htmlspecialchars($item['operator_name']); ?>"
                         data-uom="<?php echo htmlspecialchars($item['uom'] ?? 'PCS'); ?>"
                         data-status="<?php 
@@ -1326,8 +1329,10 @@ if (!function_exists('getPartProcessesList')) {
                       </td>
                       <td style="white-space: nowrap;">
                         <strong style="color: #1e293b;"><?php echo htmlspecialchars($item['mip_no'] ?: '-'); ?></strong>
-                        <?php if (!empty($item['is_rework'])): ?>
-                          <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>
+                        <?php if (!empty($item['is_rework'])): 
+                          $rwBadge = !empty($item['rework_label']) ? htmlspecialchars($item['rework_label']) : 'R';
+                        ?>
+                          <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework (<?php echo $rwBadge; ?>)"><?php echo $rwBadge; ?></span>
                         <?php endif; ?>
                       </td>
                       <td style="white-space: nowrap;">
@@ -1341,6 +1346,17 @@ if (!function_exists('getPartProcessesList')) {
                       </td>
                       <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 700; color: #16a34a;">
                         <?php echo formatCleanNum($item['ok_qty'] ?? 0); ?> <span style="font-size: 0.76rem; color: #059669; font-weight: 500;"><?php echo htmlspecialchars($item['uom'] ?? 'PCS'); ?></span>
+                      </td>
+                      <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 700;">
+                        <?php 
+                          $rwRow = floatval($item['rework_qty'] ?? 0);
+                          $rejRow = floatval($item['rejected_qty'] ?? 0);
+                          $reworkVal = ($rwRow > 0 ? $rwRow : $rejRow);
+                        ?>
+                        <span style="<?php echo ($reworkVal > 0 ? 'color: #ea580c;' : 'color: var(--text-sub);'); ?>">
+                          <?php echo formatCleanNum($reworkVal); ?>
+                        </span>
+                        <span style="font-size: 0.76rem; color: #64748b; font-weight: 500;"><?php echo htmlspecialchars($item['uom'] ?? 'PCS'); ?></span>
                       </td>
                       <td style="text-align: center; white-space: nowrap;">
                         <?php 
@@ -1578,6 +1594,7 @@ if (!function_exists('getPartProcessesList')) {
       </button>
 
       <div style="display: flex; gap: 8px;">
+        <button type="button" class="btn-secondary" id="btnSliderViewBom" style="padding: 7px 12px; font-size: 0.82rem; font-weight: 600;">View BOM Specs</button>
         <button type="button" class="btn-secondary" id="btnCloseSliderFooter">Close</button>
         <a href="#" id="btnSliderOpenWorkflow" class="btn-primary" style="text-decoration: none; padding: 7px 16px; font-size: 0.82rem; display: inline-flex; align-items: center; gap: 6px;">
           <span>Open Full Process Workspace</span>
@@ -1759,6 +1776,7 @@ if (!function_exists('getPartProcessesList')) {
         tr.setAttribute('data-rejected_qty', data.rejected_qty || 0);
         tr.setAttribute('data-rework_qty', data.rework_qty || 0);
         tr.setAttribute('data-is_rework', data.is_rework ? '1' : '0');
+        tr.setAttribute('data-rework_label', data.rework_label || (data.is_rework ? 'R' : ''));
         tr.setAttribute('data-operator_name', data.operator_name || '');
         tr.setAttribute('data-uom', data.uom || 'PCS');
         tr.setAttribute('data-status', isRowComplete ? 'Completed' : (data.status || 'In Progress'));
@@ -1776,6 +1794,7 @@ if (!function_exists('getPartProcessesList')) {
           ? `<span class="tag tag-completed" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0;"><span style="width: 6px; height: 6px; border-radius: 50%; background: #16a34a;"></span>Complete</span>`
           : `<span class="tag tag-in-progress" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;"><span style="width: 6px; height: 6px; border-radius: 50%; background: #2563eb;"></span>Progress</span>`;
 
+        const rwBadge = escapeHtml(data.rework_label || 'R');
         tr.innerHTML = `
           <td style="color: var(--text-sub); font-weight: 600; text-align: center;">1</td>
           <td style="white-space: nowrap; text-align: center; font-size: 0.85rem; font-weight: 600; color: #475569;">
@@ -1783,7 +1802,7 @@ if (!function_exists('getPartProcessesList')) {
           </td>
           <td style="white-space: nowrap;">
             <strong style="color: #1e293b;">${escapeHtml(data.mip_no || '-')}</strong>
-            ${data.is_rework ? '<span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>' : ''}
+            ${data.is_rework ? `<span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework (${rwBadge})">${rwBadge}</span>` : ''}
           </td>
           <td style="white-space: nowrap;">
             <span style="font-weight: 500; color: #334155;">${escapeHtml(data.customer_name || '-')}</span>
@@ -1796,6 +1815,12 @@ if (!function_exists('getPartProcessesList')) {
           </td>
           <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 700; color: #16a34a;">
             ${formatNumber(data.ok_qty || 0)} <span style="font-size: 0.76rem; color: #059669; font-weight: 500;">${escapeHtml(data.uom || 'PCS')}</span>
+          </td>
+          <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 700;">
+            <span style="${((parseFloat(data.rework_qty || 0) > 0 ? parseFloat(data.rework_qty) : parseFloat(data.rejected_qty || 0)) > 0) ? 'color: #ea580c;' : 'color: var(--text-sub);'}">
+              ${formatNumber((parseFloat(data.rework_qty || 0) > 0 ? data.rework_qty : data.rejected_qty) || 0)}
+            </span>
+            <span style="font-size: 0.76rem; color: #64748b; font-weight: 500;">${escapeHtml(data.uom || 'PCS')}</span>
           </td>
           <td style="text-align: center; white-space: nowrap;">
             ${statusBadgeHtml}
@@ -1834,6 +1859,8 @@ if (!function_exists('getPartProcessesList')) {
           okQty: parseFloat(row.getAttribute('data-ok_qty') || 0),
           rejectedQty: parseFloat(row.getAttribute('data-rejected_qty') || 0),
           reworkQty: parseFloat(row.getAttribute('data-rework_qty') || 0),
+          isRework: (row.getAttribute('data-is_rework') === '1'),
+          reworkLabel: row.getAttribute('data-rework_label') || (row.getAttribute('data-is_rework') === '1' ? 'R' : ''),
           uom: row.getAttribute('data-uom') || 'PCS',
           status: row.getAttribute('data-status') || 'Completed',
           createdAt: row.getAttribute('data-created_at') || ''
@@ -1873,14 +1900,15 @@ if (!function_exists('getPartProcessesList')) {
           document.getElementById('vReceivedBy').textContent = data.receivedBy || '-';
         }
 
-        const totalInsp = data.okQty + data.rejectedQty;
+        const rwQty = (data.reworkQty > 0 ? data.reworkQty : data.rejectedQty) || 0;
+        const totalInsp = data.okQty + rwQty;
         const yieldPercent = totalInsp > 0 ? ((data.okQty / totalInsp) * 100).toFixed(1) : 100.0;
         const achPercent = data.targetQty > 0 ? Math.round((data.okQty / data.targetQty) * 100) : 0;
 
         document.getElementById('vYieldRate').textContent = `${yieldPercent}% Yield`;
         document.getElementById('vTargetQty').textContent = `${formatNumber(data.targetQty)} ${data.uom}`;
         document.getElementById('vOkQty').textContent = `${formatNumber(data.okQty)} ${data.uom}`;
-        document.getElementById('vRejectedQty').textContent = `${formatNumber(data.rejectedQty)} ${data.uom}`;
+        document.getElementById('vRejectedQty').textContent = `${formatNumber(rwQty)} ${data.uom}`;
         document.getElementById('vAchievedRate').textContent = `${achPercent}%`;
 
         document.getElementById('vProgressBar').style.width = `${Math.min(yieldPercent, 100)}%`;
@@ -1971,6 +1999,15 @@ if (!function_exists('getPartProcessesList')) {
         });
       }
 
+      const btnSliderViewBom = document.getElementById('btnSliderViewBom');
+      if (btnSliderViewBom) {
+        btnSliderViewBom.addEventListener('click', () => {
+          if (currentViewingData) {
+            openViewModal(currentViewingData);
+          }
+        });
+      }
+
       async function openProcessSlider(rowData) {
         currentViewingData = rowData;
         const mip = rowData.mipNo || '';
@@ -1992,9 +2029,11 @@ if (!function_exists('getPartProcessesList')) {
         // Update Slider Sub-Header Meta
         const elMetaMip = document.getElementById('sldMetaMip');
         const elMetaPart = document.getElementById('sldMetaPart');
-        const isRw = Boolean(rowData.isRework || (row ? (row.getAttribute('data-is_rework') === '1') : false));
+        const elMetaDate = document.getElementById('sldMetaDate');
+        const isRw = Boolean(rowData.isRework);
+        const rwLbl = escapeHtml(rowData.reworkLabel || 'R');
         if (elMetaMip) {
-          elMetaMip.innerHTML = (escapeHtml(mip || '-')) + (isRw ? ' <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>' : '');
+          elMetaMip.innerHTML = (escapeHtml(mip || '-')) + (isRw ? ` <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework (${rwLbl})">${rwLbl}</span>` : '');
         }
         if (elMetaPart) elMetaPart.textContent = `${rowData.partCode || ''} ${rowData.partName ? '- ' + rowData.partName : ''}`.trim() || partName;
         if (elMetaDate) elMetaDate.textContent = rowData.createdAt ? formatDateDMY(rowData.createdAt) : '-';
@@ -2305,7 +2344,8 @@ if (!function_exists('getPartProcessesList')) {
 
       // Print Production Slip (A4 Portrait)
       function printProductionSlip(data) {
-        const totalInsp = data.okQty + data.rejectedQty;
+        const rwQty = (data.reworkQty > 0 ? data.reworkQty : data.rejectedQty) || 0;
+        const totalInsp = data.okQty + rwQty;
         const yieldPercent = totalInsp > 0 ? ((data.okQty / totalInsp) * 100).toFixed(1) : 100.0;
         const achPercent = data.targetQty > 0 ? Math.round((data.okQty / data.targetQty) * 100) : 0;
 
@@ -2527,7 +2567,7 @@ if (!function_exists('getPartProcessesList')) {
                 <tr>
                   <td>${formatNumber(data.targetQty)} ${escapeHtml(data.uom)}</td>
                   <td style="color:#059669;">${formatNumber(data.okQty)} ${escapeHtml(data.uom)}</td>
-                  <td style="color:${data.rejectedQty > 0 ? '#ea580c' : '#64748b'};">${formatNumber(data.rejectedQty)} ${escapeHtml(data.uom)}</td>
+                  <td style="color:${rwQty > 0 ? '#ea580c' : '#64748b'};">${formatNumber(rwQty)} ${escapeHtml(data.uom)}</td>
                   <td>${formatNumber(totalInsp)} ${escapeHtml(data.uom)}</td>
                   <td style="color:#059669;">${yieldPercent}%</td>
                   <td style="color:#2563eb;">${achPercent}%</td>
@@ -2639,6 +2679,7 @@ if (!function_exists('getPartProcessesList')) {
         }
       });
       window.openProcessSlider = openProcessSlider;
+      window.openViewModal = openViewModal;
 
 
 
@@ -2744,13 +2785,12 @@ if (!function_exists('getPartProcessesList')) {
         rows.forEach(r => {
           const ok = parseFloat(r.getAttribute('data-ok_qty') || 0);
           const rej = parseFloat(r.getAttribute('data-rejected_qty') || 0);
+          const rw = parseFloat(r.getAttribute('data-rework_qty') || 0);
           const isRework = (r.getAttribute('data-is_rework') || '0') === '1';
           const pDate = r.getAttribute('data-created_at') || '';
 
           sumOk += ok;
-          if (!isRework) {
-            sumRej += rej;
-          }
+          sumRej += (rw > 0 ? rw : rej);
           if (pDate === todaySqlStr) {
             todayOk += ok;
           }
@@ -2804,7 +2844,7 @@ if (!function_exists('getPartProcessesList')) {
           if (!emptyFiltered) {
             emptyFiltered = document.createElement('tr');
             emptyFiltered.id = 'emptyFilteredRow';
-            emptyFiltered.innerHTML = `<td colspan="8" style="text-align: center; padding: 30px; color: #94a3b8; font-style: italic;">No matching production entries found for the selected filter.</td>`;
+            emptyFiltered.innerHTML = `<td colspan="10" style="text-align: center; padding: 30px; color: #94a3b8; font-style: italic;">No matching production entries found for the selected filter.</td>`;
             prdTableBody.appendChild(emptyFiltered);
           }
         } else if (emptyFiltered) {

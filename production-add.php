@@ -98,7 +98,7 @@ if ($pdo) {
         }
 
         // Fetch already saved production entries to prevent duplicate saves
-        $stmtLogged = $pdo->query("SELECT id, mip_no, part_code, is_rework, status FROM production_entry");
+        $stmtLogged = $pdo->query("SELECT id, mip_no, part_code, is_rework, rework_iteration, rework_label, status FROM production_entry");
         $loggedProductionList = $stmtLogged ? $stmtLogged->fetchAll(PDO::FETCH_ASSOC) : [];
 
         // If edit mode, load existing entry
@@ -108,6 +108,7 @@ if ($pdo) {
                        department, received_by, process_name,
                        target_qty, ok_qty, rejected_qty,
                        operator_name, uom, status, is_rework, entry_type, rework_source_entry_id,
+                       rework_iteration, rework_label,
                        CONVERT(VARCHAR(10), created_at, 120) as entry_date,
                        CONVERT(VARCHAR(19), created_at, 120) as created_at
                 FROM production_entry
@@ -504,6 +505,8 @@ if ($pdo) {
             <input type="hidden" id="inputIsRework" value="<?php echo !empty($existingEntry['is_rework']) ? 1 : ($isReworkPrefill ? 1 : 0); ?>">
             <input type="hidden" id="inputEntryType" value="<?php echo htmlspecialchars($existingEntry['entry_type'] ?? ($isReworkPrefill ? 'Rework' : 'Regular')); ?>">
             <input type="hidden" id="inputReworkSourceEntryId" value="<?php echo htmlspecialchars($existingEntry['rework_source_entry_id'] ?? ''); ?>">
+            <input type="hidden" id="inputReworkLabel" value="<?php echo htmlspecialchars($existingEntry['rework_label'] ?? ''); ?>">
+            <input type="hidden" id="inputReworkIteration" value="<?php echo htmlspecialchars($existingEntry['rework_iteration'] ?? 0); ?>">
 
             <!-- Rework Mode Banner -->
             <div id="reworkModeBanner" style="display: <?php echo ($isReworkPrefill || !empty($existingEntry['is_rework'])) ? 'block' : 'none'; ?>; background: #fff7ed; border: 1.5px solid #fed7aa; border-radius: 8px; padding: 12px 16px; margin-top: 14px;">
@@ -511,7 +514,10 @@ if ($pdo) {
                 <div style="display: flex; align-items: center; gap: 10px;">
                   <div style="width: 32px; height: 32px; border-radius: 6px; background: #ea580c; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; font-weight: 800;">⟳</div>
                   <div>
-                    <div style="font-size: 0.90rem; font-weight: 700; color: #9a3412;">Rework Production Entry Mode</div>
+                    <div style="font-size: 0.90rem; font-weight: 700; color: #9a3412;">
+                      Rework Production Entry Mode 
+                      <span id="reworkModeBadgeText" style="margin-left: 6px; font-size: 0.72rem; padding: 2px 8px; border-radius: 9999px; background: #ea580c; color: #fff; font-weight: 800;"><?php echo htmlspecialchars($existingEntry['rework_label'] ?? 'R'); ?></span>
+                    </div>
                     <div style="font-size: 0.80rem; color: #c2410c;">
                       This entry logs approved rework parts back into production under the original MIP No.
                       Available Pending Rework: <strong id="reworkQuotaText">0 NOS</strong>
@@ -831,12 +837,21 @@ if ($pdo) {
           opt.setAttribute('data-rework-pending', reworkPending);
           opt.setAttribute('data-is-rework', isReworkOpt ? '1' : '0');
 
+          // Calculate next rework iteration and label: R, R1, R2...
+          const existingReworkCount = loggedProductionEntries.filter(lp => {
+            return (lp.is_rework == 1 || lp.is_rework === '1') && (lp.mip_no || '').trim().toLowerCase() === issueNo.toLowerCase();
+          }).length;
+          const nextReworkIter = existingReworkCount + 1;
+          const nextReworkLabel = (nextReworkIter === 1) ? 'R' : ('R' + (nextReworkIter - 1));
+          opt.setAttribute('data-rework-iteration', nextReworkIter);
+          opt.setAttribute('data-rework-label', nextReworkLabel);
+
           const pName = (m.part_name || (partsCatalog[m.part_code] ? partsCatalog[m.part_code].part_name : m.part_code) || '').trim();
           opt.setAttribute('data-part-name', pName);
 
           // Display Part Name and MIP No with rework badge if applicable
           if (isReworkOpt) {
-            opt.textContent = `${pName} (${issueNo}) [⟳ Rework Pending: ${reworkPending} NOS]`;
+            opt.textContent = `${pName} (${issueNo}) [⟳ Rework Pending (${nextReworkLabel}): ${reworkPending} NOS]`;
           } else if (issueNo) {
             opt.textContent = `${pName} (${issueNo})`;
           } else {
@@ -1029,11 +1044,19 @@ if ($pdo) {
           const reworkQuotaText = document.getElementById('reworkQuotaText');
           const inputIsRework = document.getElementById('inputIsRework');
           const inputEntryType = document.getElementById('inputEntryType');
+          const optRwLabel = optSelected ? (optSelected.getAttribute('data-rework-label') || 'R') : 'R';
+          const optRwIter = optSelected ? (optSelected.getAttribute('data-rework-iteration') || '1') : '1';
+          const inputReworkLabel = document.getElementById('inputReworkLabel');
+          const inputReworkIteration = document.getElementById('inputReworkIteration');
+          const rwBadgeEl = document.getElementById('reworkModeBadgeText');
 
           let qty = 0;
           if (isReworkMode) {
             if (inputIsRework) inputIsRework.value = '1';
             if (inputEntryType) inputEntryType.value = 'Rework';
+            if (inputReworkLabel) inputReworkLabel.value = optRwLabel;
+            if (inputReworkIteration) inputReworkIteration.value = optRwIter;
+            if (rwBadgeEl) rwBadgeEl.textContent = optRwLabel;
             if (reworkBanner) reworkBanner.style.display = 'block';
             if (reworkQuotaText) reworkQuotaText.textContent = `${rPending} ${match.uom || 'PCS'}`;
 
@@ -1045,6 +1068,8 @@ if ($pdo) {
           } else {
             if (inputIsRework) inputIsRework.value = '0';
             if (inputEntryType) inputEntryType.value = 'Regular';
+            if (inputReworkLabel) inputReworkLabel.value = '';
+            if (inputReworkIteration) inputReworkIteration.value = '0';
             if (reworkBanner) reworkBanner.style.display = 'none';
 
             qty = parseFloat(match.issued_qty || 0);
@@ -1222,7 +1247,9 @@ if ($pdo) {
           uom: uom,
           status: status,
           is_rework: isReworkVal,
-          entry_type: entryTypeVal
+          entry_type: entryTypeVal,
+          rework_label: document.getElementById('inputReworkLabel')?.value || '',
+          rework_iteration: parseInt(document.getElementById('inputReworkIteration')?.value || 0, 10)
         };
 
         const submitBtn = document.getElementById('savePrdSubmitBtn');

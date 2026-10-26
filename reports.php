@@ -227,53 +227,7 @@ if ($pdo) {
       color: #0f172a;
     }
 
-    /* Summary KPI Strip */
-    .summary-strip {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-      gap: 12px;
-      width: 100%;
-      box-sizing: border-box;
-      min-width: 0;
-    }
 
-    .summary-pill-box {
-      background: #ffffff;
-      border: 1px solid var(--rep-border);
-      border-radius: 10px;
-      padding: 12px 16px;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-      min-width: 0;
-    }
-
-    .summary-pill-label {
-      font-size: 0.72rem;
-      font-weight: 700;
-      color: var(--rep-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .summary-pill-val {
-      font-size: 1.35rem;
-      font-weight: 800;
-      color: var(--rep-dark);
-      letter-spacing: -0.02em;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .summary-pill-val.green { color: #059669; }
-    .summary-pill-val.red { color: #dc2626; }
-    .summary-pill-val.amber { color: #d97706; }
-    .summary-pill-val.blue { color: #2563eb; }
 
     /* Report Data Table Card */
     .report-table-card {
@@ -542,44 +496,7 @@ if ($pdo) {
         color: #334155 !important;
       }
 
-      /* KPI Summary Strip in Print */
-      .summary-strip {
-        display: flex !important;
-        flex-wrap: wrap !important;
-        gap: 8px !important;
-        margin-bottom: 12px !important;
-        page-break-inside: avoid !important;
-      }
 
-      .summary-pill-box {
-        background: #ffffff !important;
-        border: 1pt solid #cbd5e1 !important;
-        padding: 6px 12px !important;
-        border-radius: 4px !important;
-        flex: 1 1 auto !important;
-        min-width: 120px !important;
-        box-shadow: none !important;
-        -webkit-print-color-adjust: exact !important;
-        print-color-adjust: exact !important;
-      }
-
-      .summary-pill-label {
-        font-size: 7pt !important;
-        color: #475569 !important;
-        text-transform: uppercase !important;
-        font-weight: 700 !important;
-        margin-bottom: 2px !important;
-      }
-
-      .summary-pill-val {
-        font-size: 11pt !important;
-        font-weight: 800 !important;
-        color: #0f172a !important;
-      }
-
-      .summary-pill-val.green { color: #047857 !important; }
-      .summary-pill-val.red { color: #b91c1c !important; }
-      .summary-pill-val.blue { color: #1d4ed8 !important; }
 
       /* Table Card & Data Table */
       .report-table-card {
@@ -734,9 +651,9 @@ if ($pdo) {
 
             <div class="quick-dates">
               <span style="font-size: 0.76rem; font-weight: 700; color: var(--rep-muted); margin-right: 4px;">QUICK RANGE:</span>
-              <button type="button" class="btn-quick-date" data-range="today">Today</button>
+              <button type="button" class="btn-quick-date active" data-range="today">Today</button>
               <button type="button" class="btn-quick-date" data-range="week">Last 7 Days</button>
-              <button type="button" class="btn-quick-date active" data-range="month">This Month</button>
+              <button type="button" class="btn-quick-date" data-range="month">This Month</button>
               <button type="button" class="btn-quick-date" data-range="all">All Time</button>
             </div>
           </div>
@@ -752,7 +669,7 @@ if ($pdo) {
                 <!-- <option value="rm_inward">Raw Material (RM) Inward</option> (Hidden) -->
                 <option value="child_inward">RM & Child Part Inward</option>
                 <option value="fg_dispatch">Finished Goods (FG) Dispatch</option>
-                <option value="inventory">Warehouse Inventory Stocks</option>
+                <option value="inventory">Child Part Inventory Stocks</option>
               </select>
             </div>
 
@@ -798,11 +715,6 @@ if ($pdo) {
             </div>
 
           </form>
-        </div>
-
-        <!-- Summary Strip (Dynamic Metrics calculated per filter) -->
-        <div class="summary-strip" id="summaryStrip">
-          <!-- Populated by JavaScript -->
         </div>
 
         <!-- Report Data Table & Export Actions Card -->
@@ -895,8 +807,8 @@ if ($pdo) {
       const printReportBtn = document.getElementById('printReportBtn');
       const quickDateBtns = document.querySelectorAll('.btn-quick-date');
 
-      // Initialize default date range: "This Month"
-      setQuickDate('month');
+      // Initialize default date range: "Today"
+      setQuickDate('today');
 
       // Quick Date Range Preset Handler
       function setQuickDate(range) {
@@ -939,9 +851,10 @@ if ($pdo) {
       resetBtn.addEventListener('click', () => {
         searchInput.value = '';
         if (customerSelect) customerSelect.value = '';
-        setQuickDate('all');
+        setQuickDate('today');
         quickDateBtns.forEach(b => b.classList.remove('active'));
-        document.querySelector('[data-range="all"]').classList.add('active');
+        const todayBtn = document.querySelector('[data-range="today"]');
+        if (todayBtn) todayBtn.classList.add('active');
         loadReportData();
       });
 
@@ -1035,10 +948,7 @@ if ($pdo) {
             return;
           }
 
-          // 1. Render Summary Strip
-          renderSummaryStrip(data.summary);
-
-          // 2. Render Table Headers
+          // 1. Render Table Headers
           renderTableHeaders(data.columns);
 
           // 3. Render Table Rows
@@ -1058,29 +968,8 @@ if ($pdo) {
         }
       };
 
-      // Summary Strip Renderer
-      function renderSummaryStrip(summary) {
-        const strip = document.getElementById('summaryStrip');
-        if (!summary || summary.length === 0) {
-          strip.innerHTML = '';
-          return;
-        }
-
-        strip.innerHTML = summary.map(item => {
-          let hlClass = '';
-          if (item.highlight === 'green') hlClass = 'green';
-          else if (item.highlight === 'red') hlClass = 'red';
-          else if (item.highlight === 'amber') hlClass = 'amber';
-          else if (item.highlight === 'blue') hlClass = 'blue';
-
-          return `
-            <div class="summary-pill-box">
-              <span class="summary-pill-label">${escapeHtml(item.label)}</span>
-              <span class="summary-pill-val ${hlClass}">${escapeHtml(item.value)}</span>
-            </div>
-          `;
-        }).join('');
-      }
+      // Summary Strip Renderer (Cardview removed per requirement)
+      function renderSummaryStrip(summary) {}
 
       // Table Header Renderer
       function renderTableHeaders(cols) {
@@ -1133,14 +1022,15 @@ if ($pdo) {
                 }
 
                 if (k === 'mip_no') {
-                  const isRw = Boolean(row.is_rework && (row.is_rework == 1 || row.is_rework === '1' || row.is_rework === true));
-                  return `<td><strong>${escapeHtml(val)}</strong>${isRw ? ' <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>' : ''}</td>`;
+                  const isRw = Boolean(r.is_rework && (r.is_rework == 1 || r.is_rework === '1' || r.is_rework === true));
+                  const rwLbl = escapeHtml(r.rework_label || 'R');
+                  return `<td><strong>${escapeHtml(val)}</strong>${isRw ? ` <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework (${rwLbl})">${rwLbl}</span>` : ''}</td>`;
                 }
 
                 if (k === 'ok_qty') {
                   return `<td><strong style="color: #059669;">${escapeHtml(val)}</strong></td>`;
                 }
-                if (k === 'rejected_qty') {
+                if (k === 'rejected_qty' || k === 'rework_qty') {
                   const num = parseFloat(val);
                   return `<td><span style="${num > 0 ? 'color: #ea580c; font-weight: 700;' : 'color: var(--rep-muted);'}">${escapeHtml(val)}</span></td>`;
                 }

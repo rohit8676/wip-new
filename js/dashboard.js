@@ -202,7 +202,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const effectiveStatus = isDone ? 'Completed' : 'In Progress';
                 const searchKeywords = escapeHtml(`${partTitle} ${partCode} ${mipNo} ${isRework ? 'r rework ' : ''}${custName} ${workOrder} ${soNumber}`.toLowerCase());
 
-                const reworkTag = isRework ? '<span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>' : '';
+                const rwLbl = escapeHtml(rp.rework_label || 'R');
+                const reworkTag = isRework ? `<span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework (${rwLbl})">${rwLbl}</span>` : '';
                 const mipBadge = (mipNo && mipNo !== '-') ? `<span class="running-part-mip"><strong>${mipNo}</strong>${reworkTag}</span>` : '';
                 const codeBadge = partCode ? `<span class="running-part-code" title="Part Code">${partCode}</span>` : '';
                 const statusPill = isDone
@@ -392,8 +393,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const elMetaPart = document.getElementById('sldMetaPart');
     const elMetaDate = document.getElementById('sldMetaDate');
     const isRw = Boolean(data.isRework || (data.is_rework == 1 || data.is_rework === '1' || data.is_rework === true));
+    const rwLbl = escapeHtml(data.rework_label || data.reworkLabel || 'R');
     if (elMetaMip) {
-      elMetaMip.innerHTML = (escapeHtml(mip || '-')) + (isRw ? ' <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>' : '');
+      elMetaMip.innerHTML = (escapeHtml(mip || '-')) + (isRw ? ` <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework (${rwLbl})">${rwLbl}</span>` : '');
     }
     if (elMetaPart) elMetaPart.textContent = `${data.partCode || ''} ${data.partName ? '- ' + data.partName : ''}`.trim() || data.partName || '-';
     if (elMetaDate) elMetaDate.textContent = data.createdAt ? formatDateDMY(data.createdAt) : '-';

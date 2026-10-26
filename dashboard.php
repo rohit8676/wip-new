@@ -50,9 +50,9 @@ if ($pdo) {
         $prdRow = $pdo->query("
             SELECT 
                 COUNT(*) AS total_runs,
-                ISNULL(SUM(target_qty), 0) AS target, 
+                ISNULL(SUM(CASE WHEN is_rework = 0 OR is_rework IS NULL THEN target_qty ELSE 0 END), 0) AS target, 
                 ISNULL(SUM(ok_qty), 0) AS ok_q, 
-                ISNULL(SUM(CASE WHEN is_rework = 0 OR is_rework IS NULL THEN rejected_qty ELSE 0 END), 0) AS rej_q,
+                ISNULL(SUM(CASE WHEN ISNULL(rework_qty, 0) > 0 THEN rework_qty ELSE ISNULL(rejected_qty, 0) END), 0) AS rej_q,
                 COUNT(CASE WHEN status != 'Completed' AND (target_qty = 0 OR (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0) + ISNULL(rework_qty, 0)) < target_qty) THEN 1 END) AS active_wip,
                 COUNT(CASE WHEN status = 'Completed' OR (target_qty > 0 AND (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0) + ISNULL(rework_qty, 0)) >= target_qty) THEN 1 END) AS completed_wip
             FROM production_entry
@@ -81,8 +81,8 @@ if ($pdo) {
             SELECT 
                 ISNULL(NULLIF(shift, ''), 'General') AS shift_name, 
                 ISNULL(SUM(ok_qty), 0) AS ok_qty, 
-                ISNULL(SUM(rejected_qty), 0) AS rejected_qty, 
-                ISNULL(SUM(target_qty), 0) AS target_qty 
+                ISNULL(SUM(CASE WHEN ISNULL(rework_qty, 0) > 0 THEN rework_qty ELSE ISNULL(rejected_qty, 0) END), 0) AS rejected_qty, 
+                ISNULL(SUM(CASE WHEN is_rework = 0 OR is_rework IS NULL THEN target_qty ELSE 0 END), 0) AS target_qty 
             FROM production_entry 
             GROUP BY ISNULL(NULLIF(shift, ''), 'General') 
             ORDER BY shift_name
@@ -105,7 +105,7 @@ if ($pdo) {
         // Shop Floor Production Parts (Running & Completed)
         $runningParts = $pdo->query("
             SELECT TOP 100 id, mip_no, customer_name, customer_code, so_number, work_order, part_code, part_name,
-                   process_name, shift, target_qty, ok_qty, rejected_qty, rework_qty, is_rework, operator_name, uom, status,
+                   process_name, shift, target_qty, ok_qty, rejected_qty, rework_qty, is_rework, rework_iteration, rework_label, operator_name, uom, status,
                    current_stage_order, current_stage_name, total_stages,
                    CONVERT(VARCHAR(10), created_at, 120) AS entry_date,
                    CONVERT(VARCHAR(16), created_at, 120) AS created_at
@@ -136,7 +136,7 @@ if ($pdo) {
         // Recent Production Entries
         $recentProduction = $pdo->query("
             SELECT TOP 8 id, mip_no, work_order, part_code, part_name, process_name, shift, 
-                         target_qty, ok_qty, rejected_qty, rework_qty, is_rework, operator_name, uom, status, 
+                         target_qty, ok_qty, rejected_qty, rework_qty, is_rework, rework_iteration, rework_label, operator_name, uom, status, 
                          CONVERT(VARCHAR(16), created_at, 120) AS created_at 
             FROM production_entry 
             ORDER BY id DESC
@@ -1483,8 +1483,10 @@ if ($pdo) {
                       <?php if (!empty($mipNo) && $mipNo !== '-'): ?>
                         <span class="running-part-mip">
                           <strong><?php echo $mipNo; ?></strong>
-                          <?php if ($isRw): ?>
-                            <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>
+                          <?php if ($isRw): 
+                            $rwLbl = !empty($rp['rework_label']) ? htmlspecialchars($rp['rework_label']) : 'R';
+                          ?>
+                            <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework (<?php echo $rwLbl; ?>)"><?php echo $rwLbl; ?></span>
                           <?php endif; ?>
                         </span>
                       <?php endif; ?>
@@ -1750,8 +1752,10 @@ if ($pdo) {
                   <tr>
                     <td>
                       <strong><?php echo htmlspecialchars($r['mip_no'] ?? 'N/A'); ?></strong>
-                      <?php if (!empty($r['is_rework'])): ?>
-                        <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>
+                      <?php if (!empty($r['is_rework'])): 
+                        $rwLbl = !empty($r['rework_label']) ? htmlspecialchars($r['rework_label']) : 'R';
+                      ?>
+                        <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework (<?php echo $rwLbl; ?>)"><?php echo $rwLbl; ?></span>
                       <?php endif; ?>
                       <?php if (!empty($r['work_order'])): ?>
                       <div style="font-size: 0.74rem; color: var(--dash-muted);">WO: <?php echo htmlspecialchars($r['work_order']); ?></div>

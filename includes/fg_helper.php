@@ -210,7 +210,7 @@ if (!function_exists('searchMipWithRework')) {
         $stRework = $pdo->prepare("
             SELECT id, mip_no, work_order, part_code, part_name, customer_name,
                    target_qty, ok_qty, operator_name, uom, status, is_rework,
-                   rework_source_entry_id,
+                   rework_source_entry_id, rework_iteration, rework_label,
                    CONVERT(VARCHAR(10), created_at, 120) as production_date,
                    CONVERT(VARCHAR(19), created_at, 120) as created_at
             FROM production_entry
@@ -231,9 +231,12 @@ if (!function_exists('searchMipWithRework')) {
             $rwOk = floatval($rw['ok_qty'] ?? 0);
             if ($rwOk <= 0) continue;
             $rwVariants = extractFinalStageVariants($pdo, $rw['id'], $partCode, $rwOk);
+            $rwLabel = !empty($rw['rework_label']) ? $rw['rework_label'] : 'R';
             $reworkRuns[] = [
                 'id' => intval($rw['id']),
                 'ok_qty' => $rwOk,
+                'rework_label' => $rwLabel,
+                'rework_iteration' => intval($rw['rework_iteration'] ?? 1),
                 'production_date' => $rw['production_date'] ?: substr($rw['created_at'], 0, 10),
                 'operator_name' => $rw['operator_name'] ?: 'Operator',
                 'variants' => $rwVariants
@@ -244,15 +247,77 @@ if (!function_exists('searchMipWithRework')) {
 
         $totalOkQty = $parentOk + $reworkTotalOk;
 
-        // 3. Check duplicate inward status in fg_inward_logs
+        // 3. Check duplicate inward status and detect any remaining rework in fg_inward_logs
         $stDup = $pdo->prepare("
-            SELECT TOP 1 id, inward_no, ok_qty, has_rework_appended, created_at
+            SELECT TOP 1 id, inward_no, ok_qty, original_ok_qty, rework_ok_qty,
+                         has_rework_appended, rework_appended_info, variant_details, created_at
             FROM fg_inward_logs
             WHERE LOWER(RTRIM(LTRIM(mip_no))) = LOWER(?)
             ORDER BY id DESC
         ");
         $stDup->execute([$mipNo]);
         $dup = $stDup->fetch(PDO::FETCH_ASSOC);
+
+        $alreadyInwarded = ($dup !== false && !empty($dup['id']));
+        $alreadyInwardedQty = $alreadyInwarded ? floatval($dup['ok_qty'] ?? 0) : 0;
+        $previouslyInwardedVariants = [];
+        $alreadyInwardedReworkIds = [];
+        $alreadyInwardedReworkRuns = [];
+        $pendingReworkRuns = [];
+        $pendingReworkOk = 0;
+        $pendingReworkVariants = [];
+        $canAppendRework = false;
+        $newTotalOkQty = $totalOkQty;
+        $mergedAllVariants = $combinedVariants;
+        $allReworkRuns = $reworkRuns;
+
+        if ($alreadyInwarded) {
+            if (!empty($dup['variant_details'])) {
+                $previouslyInwardedVariants = is_string($dup['variant_details'])
+                    ? json_decode($dup['variant_details'], true)
+                    : $dup['variant_details'];
+                if (!is_array($previouslyInwardedVariants)) {
+                    $previouslyInwardedVariants = [];
+                }
+            }
+
+            $existingReworkAppended = [];
+            if (!empty($dup['rework_appended_info'])) {
+                $existingReworkAppended = is_string($dup['rework_appended_info'])
+                    ? json_decode($dup['rework_appended_info'], true)
+                    : $dup['rework_appended_info'];
+                if (!is_array($existingReworkAppended)) {
+                    $existingReworkAppended = [];
+                }
+            }
+
+            foreach ($existingReworkAppended as $app) {
+                if (!empty($app['id'])) {
+                    $alreadyInwardedReworkIds[] = intval($app['id']);
+                }
+            }
+
+            foreach ($reworkRuns as $rw) {
+                $rwId = intval($rw['id']);
+                if (in_array($rwId, $alreadyInwardedReworkIds, true)) {
+                    $alreadyInwardedReworkRuns[] = $rw;
+                } else {
+                    $pendingReworkRuns[] = $rw;
+                    $pendingReworkOk += floatval($rw['ok_qty']);
+                    $pendingReworkVariants = mergeVariantArrays($pendingReworkVariants, $rw['variants']);
+                }
+            }
+
+            // Fallback: If pendingReworkOk is 0 but production has more OK qty than already inwarded
+            if ($pendingReworkOk <= 0 && $totalOkQty > $alreadyInwardedQty) {
+                $pendingReworkOk = $totalOkQty - $alreadyInwardedQty;
+            }
+
+            $canAppendRework = ($pendingReworkOk > 0);
+            $newTotalOkQty = $alreadyInwardedQty + $pendingReworkOk;
+            $mergedAllVariants = mergeVariantArrays($previouslyInwardedVariants, $pendingReworkVariants);
+            $allReworkRuns = array_merge($existingReworkAppended, $pendingReworkRuns);
+        }
 
         return [
             'success' => true,
@@ -273,9 +338,20 @@ if (!function_exists('searchMipWithRework')) {
                 'rework_total_ok' => $reworkTotalOk,
                 'total_ok_qty' => $totalOkQty,
                 'combined_variants' => $combinedVariants,
-                'already_inwarded' => $dup ? true : false,
+                'already_inwarded' => $alreadyInwarded,
+                'can_append_rework' => $canAppendRework,
                 'inward_ref' => $dup ? $dup['inward_no'] : null,
-                'inward_ok_qty' => $dup ? floatval($dup['ok_qty']) : 0
+                'inward_log_id' => $dup ? intval($dup['id']) : null,
+                'inward_ok_qty' => $alreadyInwardedQty,
+                'previously_inwarded_qty' => $alreadyInwardedQty,
+                'previously_inwarded_variants' => $previouslyInwardedVariants,
+                'already_inwarded_runs' => $alreadyInwardedReworkRuns,
+                'pending_rework_runs' => $pendingReworkRuns,
+                'pending_rework_ok' => $pendingReworkOk,
+                'pending_rework_variants' => $pendingReworkVariants,
+                'new_total_ok_qty' => $newTotalOkQty,
+                'all_rework_runs' => $allReworkRuns,
+                'merged_all_variants' => $mergedAllVariants
             ]
         ];
     }
@@ -284,6 +360,7 @@ if (!function_exists('searchMipWithRework')) {
 if (!function_exists('saveInwardConsolidated')) {
     /**
      * Save consolidated finished goods inward into fg_inward_logs and update fg_inventory
+     * Supports appending newly completed rework quantities to existing stock.
      */
     function saveInwardConsolidated($pdo, $postData) {
         $inwardNo   = trim($postData['inward_no'] ?? '');
@@ -301,12 +378,24 @@ if (!function_exists('saveInwardConsolidated')) {
         $remarks    = trim($postData['remarks'] ?? '');
         $parentEntryId = !empty($postData['parent_entry_id']) ? intval($postData['parent_entry_id']) : null;
 
+        $isAppend   = !empty($postData['is_append_rework']);
+        $pendingRwOk = floatval($postData['pending_rework_ok'] ?? 0);
+
         $rawVariants = $postData['variant_details'] ?? [];
         $variants = is_string($rawVariants) ? json_decode($rawVariants, true) : $rawVariants;
 
         $rawRwInfo = $postData['rework_appended_info'] ?? [];
         $reworkInfo = is_string($rawRwInfo) ? json_decode($rawRwInfo, true) : $rawRwInfo;
-        $hasRework = !empty($postData['has_rework_appended']) || ($reworkOk > 0) || (!empty($reworkInfo));
+
+        $rawPendingRwRuns = $postData['pending_rework_runs'] ?? [];
+        $pendingRwRuns = is_string($rawPendingRwRuns) ? json_decode($rawPendingRwRuns, true) : $rawPendingRwRuns;
+        if (!is_array($pendingRwRuns)) $pendingRwRuns = [];
+
+        $rawPendingRwVars = $postData['pending_rework_variants'] ?? [];
+        $pendingRwVars = is_string($rawPendingRwVars) ? json_decode($rawPendingRwVars, true) : $rawPendingRwVars;
+        if (!is_array($pendingRwVars)) $pendingRwVars = [];
+
+        $hasRework = !empty($postData['has_rework_appended']) || ($reworkOk > 0) || (!empty($reworkInfo)) || ($isAppend && $pendingRwOk > 0);
 
         if (empty($inwardNo)) {
             $inwardNo = 'FGI-' . date('Y') . '-' . rand(100, 999);
@@ -314,49 +403,90 @@ if (!function_exists('saveInwardConsolidated')) {
         if (empty($partCode)) {
             return ['success' => false, 'message' => 'Part code is required.'];
         }
-        if ($okQty <= 0) {
-            return ['success' => false, 'message' => 'Total OK quantity must be greater than zero.'];
+        if ($okQty <= 0 && $pendingRwOk <= 0) {
+            return ['success' => false, 'message' => 'Quantity must be greater than zero.'];
         }
 
         try {
             $pdo->beginTransaction();
 
             // Check if inward log already exists for this MIP
-            $stChkLog = $pdo->prepare("SELECT id FROM fg_inward_logs WHERE mip_no = ?");
+            $stChkLog = $pdo->prepare("
+                SELECT id, inward_no, ok_qty, original_ok_qty, rework_ok_qty,
+                       variant_details, rework_appended_info, remarks, customer_name
+                FROM fg_inward_logs 
+                WHERE LOWER(RTRIM(LTRIM(mip_no))) = LOWER(?)
+                ORDER BY id DESC
+            ");
             $stChkLog->execute([$mipNo]);
-            $existingLogId = $stChkLog->fetchColumn();
+            $existingLog = $stChkLog->fetch(PDO::FETCH_ASSOC);
 
-            if ($existingLogId) {
-                // Update existing inward record with consolidated data
+            if ($existingLog) {
+                $existingLogId = $existingLog['id'];
+                $prevOk = floatval($existingLog['ok_qty'] ?? 0);
+                $prevReworkOk = floatval($existingLog['rework_ok_qty'] ?? 0);
+                $prevOrigOk = floatval($existingLog['original_ok_qty'] ?: $prevOk);
+
+                $prevVariants = json_decode($existingLog['variant_details'] ?? '[]', true) ?: [];
+                $prevReworkInfo = json_decode($existingLog['rework_appended_info'] ?? '[]', true) ?: [];
+
+                if ($isAppend) {
+                    $addedRwQty = ($pendingRwOk > 0) ? $pendingRwOk : max(0, $okQty - $prevOk);
+                    $newTotalOk = $prevOk + $addedRwQty;
+                    $newTotalReworkOk = $prevReworkOk + $addedRwQty;
+
+                    // Merge variants: previous inward variants + new rework variants
+                    $newMergedVariants = mergeVariantArrays($prevVariants, !empty($pendingRwVars) ? $pendingRwVars : $variants);
+                    // Merge rework runs info
+                    $newMergedReworkInfo = array_merge($prevReworkInfo, $pendingRwRuns);
+                    $appendNote = "Appended +{$addedRwQty} {$uom} rework on " . date('Y-m-d H:i');
+                    $fullRemarks = !empty($existingLog['remarks'])
+                        ? $existingLog['remarks'] . " | " . $appendNote
+                        : $appendNote;
+                    if (!empty($remarks)) {
+                        $fullRemarks .= " (" . $remarks . ")";
+                    }
+                } else {
+                    $addedRwQty = max(0, $okQty - $prevOk);
+                    $newTotalOk = $okQty;
+                    $newTotalReworkOk = $reworkOk;
+                    $newMergedVariants = !empty($variants) ? $variants : $prevVariants;
+                    $newMergedReworkInfo = !empty($reworkInfo) ? $reworkInfo : $prevReworkInfo;
+                    $fullRemarks = !empty($remarks) ? $remarks : $existingLog['remarks'];
+                }
+
                 $stUpdLog = $pdo->prepare("
                     UPDATE fg_inward_logs
                     SET ok_qty = ?,
                         original_ok_qty = ?,
                         rework_ok_qty = ?,
-                        has_rework_appended = ?,
-                        customer_name = ?,
+                        has_rework_appended = 1,
+                        customer_name = COALESCE(?, customer_name),
                         variant_details = ?,
                         rework_appended_info = ?,
-                        production_date = ?,
-                        received_by = ?,
+                        production_date = COALESCE(?, production_date),
+                        received_by = COALESCE(?, received_by),
                         remarks = ?
                     WHERE id = ?
                 ");
                 $stUpdLog->execute([
-                    $okQty,
-                    $parentOk,
-                    $reworkOk,
-                    $hasRework ? 1 : 0,
-                    $customer,
-                    !empty($variants) ? json_encode($variants) : null,
-                    !empty($reworkInfo) ? json_encode($reworkInfo) : null,
+                    $newTotalOk,
+                    $prevOrigOk,
+                    $newTotalReworkOk,
+                    !empty($customer) ? $customer : null,
+                    !empty($newMergedVariants) ? json_encode($newMergedVariants) : null,
+                    !empty($newMergedReworkInfo) ? json_encode($newMergedReworkInfo) : null,
                     !empty($prodDate) ? $prodDate : null,
-                    $receivedBy,
-                    $remarks,
+                    !empty($receivedBy) ? $receivedBy : null,
+                    $fullRemarks,
                     $existingLogId
                 ]);
             } else {
-                // Insert new inward log
+                // Insert new inward log (Fresh Inward)
+                $addedRwQty = 0;
+                $newTotalOk = $okQty;
+                $newMergedVariants = $variants;
+                $newMergedReworkInfo = $reworkInfo;
                 $stInsLog = $pdo->prepare("
                     INSERT INTO fg_inward_logs (
                         inward_no, mip_no, production_date, part_code, part_name,
@@ -393,35 +523,42 @@ if (!function_exists('saveInwardConsolidated')) {
                 ]);
             }
 
-            // 2. Update fg_inventory
-            $stChkInv = $pdo->prepare("SELECT id, total_ok_qty, variant_stock_details FROM fg_inventory WHERE part_code = ?");
-            $stChkInv->execute([$partCode]);
+            // 2. Update fg_inventory keyed by MIP Batch (last_mip_no)
+            $stChkInv = $pdo->prepare("SELECT id, total_ok_qty, variant_stock_details FROM fg_inventory WHERE last_mip_no = ?");
+            $stChkInv->execute([$mipNo]);
             $existingInv = $stChkInv->fetch(PDO::FETCH_ASSOC);
 
             if ($existingInv) {
-                // If this is a fresh inward or update:
-                // If updating the same MIP, set quantity directly or accumulate new
+                if ($isAppend) {
+                    $newInvQty = floatval($existingInv['total_ok_qty']) + $addedRwQty;
+                    $curVarStock = json_decode($existingInv['variant_stock_details'] ?? '[]', true) ?: [];
+                    $newInvVarStock = mergeVariantArrays($curVarStock, !empty($pendingRwVars) ? $pendingRwVars : $newMergedVariants);
+                } else {
+                    $newInvQty = $okQty;
+                    $newInvVarStock = $newMergedVariants;
+                }
+
                 $stUpdInv = $pdo->prepare("
                     UPDATE fg_inventory
                     SET total_ok_qty = ?,
                         customer_name = COALESCE(?, customer_name),
                         variant_stock_details = ?,
                         part_name = ?,
+                        part_code = ?,
                         uom = ?,
-                        last_mip_no = ?,
                         last_production_date = ?,
                         updated_at = GETDATE()
-                    WHERE part_code = ?
+                    WHERE id = ?
                 ");
                 $stUpdInv->execute([
-                    $okQty,
-                    $customer,
-                    !empty($variants) ? json_encode($variants) : null,
+                    $newInvQty,
+                    !empty($customer) ? $customer : null,
+                    !empty($newInvVarStock) ? json_encode($newInvVarStock) : null,
                     $partName,
+                    $partCode,
                     $uom,
-                    $mipNo,
                     !empty($prodDate) ? $prodDate : null,
-                    $partCode
+                    $existingInv['id']
                 ]);
             } else {
                 $stInsInv = $pdo->prepare("
@@ -441,7 +578,7 @@ if (!function_exists('saveInwardConsolidated')) {
                     $customer,
                     $okQty,
                     $uom,
-                    !empty($variants) ? json_encode($variants) : null,
+                    !empty($newMergedVariants) ? json_encode($newMergedVariants) : null,
                     $mipNo,
                     !empty($prodDate) ? $prodDate : null
                 ]);
@@ -449,19 +586,25 @@ if (!function_exists('saveInwardConsolidated')) {
 
             $pdo->commit();
 
+            // Auto-synchronize fg_inventory with all inward & dispatch logs to guarantee accuracy
+            syncFgInventoryRecords($pdo);
+
+            $msg = $isAppend 
+                ? "Successfully appended +{$addedRwQty} {$uom} rework to MIP \"{$mipNo}\" stock!"
+                : "Finished Goods inward saved successfully!";
+
             return [
                 'success' => true,
-                'message' => 'Finished Goods inward saved successfully!',
+                'message' => $msg,
                 'data' => [
-                    'inward_no' => $inwardNo,
+                    'inward_no' => $existingLog ? $existingLog['inward_no'] : $inwardNo,
                     'mip_no' => $mipNo,
                     'part_code' => $partCode,
                     'part_name' => $partName,
                     'customer_name' => $customer,
-                    'total_ok_qty' => $okQty,
-                    'uom' => $uom,
-                    'has_rework' => $hasRework,
-                    'variants' => $variants
+                    'total_ok_qty' => $newTotalOk,
+                    'added_rework_qty' => $addedRwQty,
+                    'is_append' => $isAppend
                 ]
             ];
         } catch (PDOException $e) {
@@ -521,10 +664,18 @@ if (!function_exists('saveDispatchWithVariants')) {
                     throw new Exception("Dispatch quantity for {$pCode} must be greater than zero.");
                 }
 
-                // Check stock in fg_inventory
-                $stChk = $pdo->prepare("SELECT id, total_ok_qty, customer_name, variant_stock_details FROM fg_inventory WHERE part_code = ?");
-                $stChk->execute([$pCode]);
-                $inv = $stChk->fetch(PDO::FETCH_ASSOC);
+                // Check stock in fg_inventory (match batch/MIP first, fallback to part_code)
+                $inv = null;
+                if (!empty($bNo)) {
+                    $stChk = $pdo->prepare("SELECT id, total_ok_qty, customer_name, variant_stock_details FROM fg_inventory WHERE last_mip_no = ?");
+                    $stChk->execute([$bNo]);
+                    $inv = $stChk->fetch(PDO::FETCH_ASSOC);
+                }
+                if (!$inv) {
+                    $stChk = $pdo->prepare("SELECT id, total_ok_qty, customer_name, variant_stock_details FROM fg_inventory WHERE part_code = ?");
+                    $stChk->execute([$pCode]);
+                    $inv = $stChk->fetch(PDO::FETCH_ASSOC);
+                }
 
                 if (!$inv) {
                     throw new Exception("Part {$pCode} does not exist in FG Inventory.");
@@ -602,18 +753,18 @@ if (!function_exists('saveDispatchWithVariants')) {
                     !empty($variantDispatch) ? json_encode($variantDispatch) : null
                 ]);
 
-                // 2. Deduct from fg_inventory
+                // 2. Deduct from fg_inventory for this specific batch
                 $stUpdInv = $pdo->prepare("
                     UPDATE fg_inventory
                     SET total_ok_qty = ?,
                         variant_stock_details = ?,
                         updated_at = GETDATE()
-                    WHERE part_code = ?
+                    WHERE id = ?
                 ");
                 $stUpdInv->execute([
                     $newTotalStock,
                     !empty($updatedVariants) ? json_encode($updatedVariants) : null,
-                    $pCode
+                    $inv['id']
                 ]);
 
                 $dispatchedCount++;
@@ -706,3 +857,333 @@ if (!function_exists('renderVariantBadgesHtml')) {
         return ($shown > 0) ? $html : '';
     }
 }
+
+if (!function_exists('syncFgInventoryRecords')) {
+    /**
+     * Auto-synchronize fg_inventory with all fg_inward_logs and fg_dispatch_logs.
+     * Ensures every inwarded MIP has its corresponding stock entry and accurate remaining quantity.
+     */
+    function syncFgInventoryRecords($pdo) {
+        if (!$pdo) return;
+
+        try {
+            // Ensure unique part_code constraint is dropped so multiple batches of same part coexist
+            $pdo->exec("
+                IF EXISTS (SELECT * FROM sys.key_constraints WHERE name = 'UQ_fg_inv_part_code')
+                BEGIN
+                    ALTER TABLE fg_inventory DROP CONSTRAINT UQ_fg_inv_part_code;
+                END
+            ");
+
+            // Fetch all inward logs
+            $stInw = $pdo->query("SELECT * FROM fg_inward_logs ORDER BY id ASC");
+            $inwardLogs = $stInw ? $stInw->fetchAll(PDO::FETCH_ASSOC) : [];
+
+            // Fetch all dispatch logs
+            $stDsp = $pdo->query("SELECT * FROM fg_dispatch_logs");
+            $dspLogs = $stDsp ? $stDsp->fetchAll(PDO::FETCH_ASSOC) : [];
+
+            // Map dispatches by (batch_no, part_code)
+            $dispMap = [];
+            $dispVarMap = [];
+            foreach ($dspLogs as $d) {
+                $k = trim($d['batch_no'] ?? '') . '||' . trim($d['part_code'] ?? '');
+                $dispMap[$k] = ($dispMap[$k] ?? 0) + floatval($d['dispatch_qty'] ?? 0);
+
+                if (!empty($d['variant_dispatch_details'])) {
+                    $vList = json_decode($d['variant_dispatch_details'], true);
+                    if (is_array($vList)) {
+                        foreach ($vList as $v) {
+                            $vk = trim($v['code'] ?? $v['name'] ?? '');
+                            if ($vk !== '') {
+                                $vkKey = $k . '||' . $vk;
+                                $dispVarMap[$vkKey] = ($dispVarMap[$vkKey] ?? 0) + floatval($v['qty'] ?? 0);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fetch existing fg_inventory records mapped by last_mip_no
+            $stInv = $pdo->query("SELECT id, last_mip_no, part_code, total_ok_qty FROM fg_inventory");
+            $existingInv = [];
+            if ($stInv) {
+                foreach ($stInv->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $m = trim($r['last_mip_no'] ?? '');
+                    if ($m !== '') {
+                        $existingInv[$m] = $r;
+                    }
+                }
+            }
+
+            $stIns = $pdo->prepare("
+                INSERT INTO fg_inventory (
+                    part_code, part_name, customer_name, total_ok_qty, uom,
+                    variant_stock_details, last_mip_no, last_production_date,
+                    created_at, updated_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, GETDATE()
+                )
+            ");
+
+            $stUpd = $pdo->prepare("
+                UPDATE fg_inventory
+                SET total_ok_qty = ?,
+                    variant_stock_details = ?,
+                    customer_name = ?,
+                    part_name = ?,
+                    uom = ?,
+                    last_production_date = ?,
+                    updated_at = GETDATE()
+                WHERE id = ?
+            ");
+
+            foreach ($inwardLogs as $inw) {
+                $mip = trim($inw['mip_no'] ?? '');
+                $pCode = trim($inw['part_code'] ?? '');
+                if (empty($mip)) continue;
+
+                $k = $mip . '||' . $pCode;
+                $inwQty = floatval($inw['ok_qty'] ?? 0);
+                $dQty = $dispMap[$k] ?? 0;
+                $remQty = max(0, $inwQty - $dQty);
+
+                $rawVariants = json_decode($inw['variant_details'] ?? '[]', true) ?: [];
+                $remVariants = [];
+                foreach ($rawVariants as $rv) {
+                    $vk = trim($rv['code'] ?? $rv['name'] ?? '');
+                    $vInwQty = floatval($rv['qty'] ?? 0);
+                    $vDispQty = $dispVarMap[$k . '||' . $vk] ?? 0;
+                    $remVQty = max(0, $vInwQty - $vDispQty);
+                    $remVariants[] = [
+                        'code' => $rv['code'] ?? '',
+                        'name' => $rv['name'] ?? '',
+                        'qty'  => $remVQty
+                    ];
+                }
+
+                $varsJson = !empty($remVariants) ? json_encode($remVariants) : null;
+                $cust = !empty($inw['customer_name']) ? $inw['customer_name'] : 'General Customer';
+                $pDate = !empty($inw['production_date']) ? $inw['production_date'] : null;
+
+                if (isset($existingInv[$mip])) {
+                    // Update
+                    $stUpd->execute([
+                        $remQty,
+                        $varsJson,
+                        $cust,
+                        $inw['part_name'],
+                        $inw['uom'] ?? 'NOS',
+                        $pDate,
+                        $existingInv[$mip]['id']
+                    ]);
+                } else {
+                    // Insert
+                    $stIns->execute([
+                        $pCode,
+                        $inw['part_name'],
+                        $cust,
+                        $remQty,
+                        $inw['uom'] ?? 'NOS',
+                        $varsJson,
+                        $mip,
+                        $pDate,
+                        $inw['created_at']
+                    ]);
+                }
+            }
+        } catch (PDOException $e) {
+            // Fallback
+        }
+    }
+}
+
+if (!function_exists('getAvailableMipsForDispatch')) {
+    /**
+     * Fetch all in-stock MIP batches available for dispatch grouped with customer & variant breakdown
+     */
+    function getAvailableMipsForDispatch($pdo) {
+        if (!$pdo) return [];
+
+        // Auto sync inventory records first
+        syncFgInventoryRecords($pdo);
+
+        // 1. Fetch inward logs
+        $inwardLogs = [];
+        try {
+            $stInw = $pdo->query("
+                SELECT id, inward_no, mip_no, part_code, part_name, customer_name, ok_qty, uom, variant_details
+                FROM fg_inward_logs
+                ORDER BY id DESC
+            ");
+            if ($stInw) $inwardLogs = $stInw->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {}
+
+        // 2. Fetch dispatch logs
+        $dspLogs = [];
+        try {
+            $stDsp = $pdo->query("
+                SELECT id, dispatch_no, batch_no, part_code, customer, dispatch_qty, variant_dispatch_details
+                FROM fg_dispatch_logs
+            ");
+            if ($stDsp) $dspLogs = $stDsp->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {}
+
+        // 3. Fetch inventory stock
+        $invMap = [];
+        $invMapByMip = [];
+        $inventoryRows = [];
+        try {
+            $stInv = $pdo->query("
+                SELECT id, part_code, customer_name, total_ok_qty, uom, variant_stock_details, last_mip_no, part_name 
+                FROM fg_inventory
+            ");
+            if ($stInv) {
+                $inventoryRows = $stInv->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($inventoryRows as $r) {
+                    $invMap[$r['part_code']] = $r;
+                    $m = trim($r['last_mip_no'] ?? '');
+                    if ($m !== '') {
+                        $invMapByMip[$m] = $r;
+                    }
+                }
+            }
+        } catch (PDOException $e) {}
+
+        // Aggregate dispatches by (batch_no, part_code)
+        $dispatchedByBatch = [];
+        $dispatchedVariantsByBatch = [];
+        foreach ($dspLogs as $d) {
+            $key = trim($d['batch_no'] ?? '') . '||' . trim($d['part_code'] ?? '');
+            $dispatchedByBatch[$key] = ($dispatchedByBatch[$key] ?? 0) + floatval($d['dispatch_qty'] ?? 0);
+
+            if (!empty($d['variant_dispatch_details'])) {
+                $vars = json_decode($d['variant_dispatch_details'], true);
+                if (is_array($vars)) {
+                    foreach ($vars as $v) {
+                        $vk = trim($v['code'] ?? $v['name'] ?? '');
+                        if ($vk !== '') {
+                            $vkey = $key . '||' . $vk;
+                            $dispatchedVariantsByBatch[$vkey] = ($dispatchedVariantsByBatch[$vkey] ?? 0) + floatval($v['qty'] ?? 0);
+                        }
+                    }
+                }
+            }
+        }
+
+        $availableMips = [];
+        $seenMipPart = [];
+
+        // First pass: from inward logs
+        foreach ($inwardLogs as $inw) {
+            $mip = trim($inw['mip_no'] ?? '');
+            $pCode = trim($inw['part_code'] ?? '');
+            $cust = trim($inw['customer_name'] ?? '');
+            if ($cust === '') $cust = 'General Customer';
+            $key = $mip . '||' . $pCode;
+
+            if (isset($seenMipPart[$key])) continue;
+            $seenMipPart[$key] = true;
+
+            $inwQty = floatval($inw['ok_qty'] ?? 0);
+            $totalDisp = $dispatchedByBatch[$key] ?? 0;
+            $availQty = max(0, $inwQty - $totalDisp);
+
+            $invRow = $invMapByMip[$mip] ?? $invMap[$pCode] ?? null;
+            if ($invRow) {
+                $invStock = floatval($invRow['total_ok_qty'] ?? 0);
+                if ($invStock < $availQty) {
+                    $availQty = $invStock;
+                }
+                if (empty($inw['customer_name']) && !empty($invRow['customer_name'])) {
+                    $cust = $invRow['customer_name'];
+                }
+            }
+
+            if ($availQty <= 0) continue;
+
+            // Compute available variants for this MIP
+            $rawVars = json_decode($inw['variant_details'] ?? '[]', true) ?: [];
+            $availVars = [];
+            foreach ($rawVars as $rv) {
+                $vCode = trim($rv['code'] ?? '');
+                $vName = trim($rv['name'] ?? $vCode);
+                $vKey = $vCode !== '' ? $vCode : $vName;
+                $inwVQty = floatval($rv['qty'] ?? 0);
+                $dispVQty = $dispatchedVariantsByBatch[$key . '||' . $vKey] ?? 0;
+                $remVQty = max(0, $inwVQty - $dispVQty);
+
+                if ($invRow && !empty($invRow['variant_stock_details'])) {
+                    $invVars = json_decode($invRow['variant_stock_details'], true);
+                    if (is_array($invVars)) {
+                        foreach ($invVars as $iv) {
+                            $ivKey = trim($iv['code'] ?? $iv['name'] ?? '');
+                            if ($ivKey === $vKey) {
+                                $remVQty = min($remVQty, floatval($iv['qty'] ?? 0));
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if ($remVQty > 0) {
+                    $availVars[] = [
+                        'code' => $vCode,
+                        'name' => $vName,
+                        'qty'  => $remVQty
+                    ];
+                }
+            }
+
+            $availableMips[] = [
+                'mip_no' => $mip,
+                'customer_name' => $cust,
+                'part_code' => $pCode,
+                'part_name' => trim($inw['part_name'] ?? $pCode),
+                'uom' => trim($inw['uom'] ?? 'NOS'),
+                'available_qty' => $availQty,
+                'available_variants' => $availVars
+            ];
+        }
+
+        // Second pass: fallback from fg_inventory
+        foreach ($inventoryRows as $inv) {
+            $stock = floatval($inv['total_ok_qty'] ?? 0);
+            if ($stock <= 0) continue;
+            $mip = trim($inv['last_mip_no'] ?? '');
+            if ($mip === '') $mip = 'FG-' . $inv['part_code'];
+            $pCode = trim($inv['part_code']);
+            $key = $mip . '||' . $pCode;
+
+            if (!isset($seenMipPart[$key])) {
+                $seenMipPart[$key] = true;
+                $availVars = [];
+                $rawVars = json_decode($inv['variant_stock_details'] ?? '[]', true) ?: [];
+                foreach ($rawVars as $rv) {
+                    $q = floatval($rv['qty'] ?? 0);
+                    if ($q > 0) {
+                        $availVars[] = [
+                            'code' => trim($rv['code'] ?? ''),
+                            'name' => trim($rv['name'] ?? $rv['code'] ?? 'Var'),
+                            'qty'  => $q
+                        ];
+                    }
+                }
+                $availableMips[] = [
+                    'mip_no' => $mip,
+                    'customer_name' => trim($inv['customer_name'] ?? 'General Customer') ?: 'General Customer',
+                    'part_code' => $pCode,
+                    'part_name' => trim($inv['part_name'] ?? $pCode),
+                    'uom' => trim($inv['uom'] ?? 'NOS'),
+                    'available_qty' => $stock,
+                    'available_variants' => $availVars
+                ];
+            }
+        }
+
+        return $availableMips;
+    }
+}
+

@@ -106,6 +106,7 @@ try {
         }
         $soNumber = $entryData['so_number'] ?? ($entryData['work_order'] ?? ($mipData['so_number'] ?? ''));
         $isReworkEntry = (!empty($entryData['is_rework']) || (($entryData['entry_type'] ?? '') === 'Rework'));
+        $reworkLabel = !empty($entryData['rework_label']) ? trim($entryData['rework_label']) : ($isReworkEntry ? 'R' : '');
 
         // Supplement missing metadata from material_issue if needed
         if ($mipData) {
@@ -623,8 +624,10 @@ $headerBackText = 'Back to DPR Entries';
               <span class="summary-lbl">MIP Number</span>
               <span class="summary-val" style="color: #2563eb; display: inline-flex; align-items: center; gap: 6px;">
                 <?php echo htmlspecialchars($currentMipNo); ?>
-                <?php if ($isReworkEntry): ?>
-                  <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>
+                <?php if ($isReworkEntry): 
+                  $rwLbl = !empty($reworkLabel) ? htmlspecialchars($reworkLabel) : 'R';
+                ?>
+                  <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework (<?php echo $rwLbl; ?>)"><?php echo $rwLbl; ?></span>
                 <?php endif; ?>
               </span>
             </div>
@@ -641,7 +644,7 @@ $headerBackText = 'Back to DPR Entries';
               <span class="summary-val" style="color: <?php echo $isReworkEntry ? '#ea580c' : '#059669'; ?>; font-weight: 800; display: inline-flex; align-items: center; gap: 6px;">
                 <?php echo floatval($targetQty); ?> NOS
                 <?php if ($isReworkEntry): ?>
-                  <span style="font-size: 0.74rem; font-weight: 700; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; padding: 1px 6px; border-radius: 4px;">(Rework Qty)</span>
+                  <span style="font-size: 0.74rem; font-weight: 700; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; padding: 1px 6px; border-radius: 4px;">(Rework <?php echo !empty($reworkLabel) ? htmlspecialchars($reworkLabel) : 'R'; ?>)</span>
                 <?php endif; ?>
               </span>
             </div>

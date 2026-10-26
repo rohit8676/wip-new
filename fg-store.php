@@ -50,9 +50,13 @@ if ($pdo) {
                     last_mip_no NVARCHAR(50) NULL,
                     last_production_date DATE NULL,
                     created_at DATETIME DEFAULT GETDATE(),
-                    updated_at DATETIME DEFAULT GETDATE(),
-                    CONSTRAINT UQ_fg_inv_part_code UNIQUE (part_code)
+                    updated_at DATETIME DEFAULT GETDATE()
                 );
+            END
+
+            IF EXISTS (SELECT * FROM sys.key_constraints WHERE name = 'UQ_fg_inv_part_code')
+            BEGIN
+                ALTER TABLE fg_inventory DROP CONSTRAINT UQ_fg_inv_part_code;
             END
 
             IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='fg_inward_logs' AND xtype='U')
@@ -260,13 +264,14 @@ $fgDispatchLogsList = [];
 
 if ($pdo) {
     try {
+        syncFgInventoryRecords($pdo);
         $stmtInv = $pdo->query("
             SELECT id, part_code, part_name, customer_name, total_ok_qty, uom,
                    variant_stock_details, last_mip_no,
                    CONVERT(VARCHAR(10), last_production_date, 120) as production_date,
                    CONVERT(VARCHAR(19), updated_at, 120) as updated_at
             FROM fg_inventory
-            ORDER BY part_code ASC
+            ORDER BY id DESC
         ");
         $fgInventoryList = $stmtInv ? $stmtInv->fetchAll(PDO::FETCH_ASSOC) : [];
     } catch (PDOException $e) {
@@ -308,6 +313,9 @@ if ($pdo) {
         // Fallback
     }
 }
+
+// Available MIPs in store grouped for dispatch dropdowns
+$availableMipsForDispatch = ($pdo) ? getAvailableMipsForDispatch($pdo) : [];
 
 // Calculated stats based on real database records
 $totalStock = 0;
@@ -429,6 +437,18 @@ $activeMenu = 'fg-store.php';
       font-weight: 700;
     }
 
+    /* 2-Column Stats Row */
+    .stats-row-2 {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    @media (max-width: 640px) {
+      .stats-row-2 {
+        grid-template-columns: 1fr;
+      }
+    }
+
     /* Action Buttons in Table */
     .action-btns {
       display: flex;
@@ -469,6 +489,17 @@ $activeMenu = 'fg-store.php';
     .btn-dispatch:hover {
       background: #e0e7ff;
       border-color: #4f46e5;
+    }
+    .btn-dispatch:disabled,
+    .btn-dispatch.disabled,
+    .btn-dispatched {
+      background: #f1f5f9 !important;
+      color: #94a3b8 !important;
+      border-color: #cbd5e1 !important;
+      cursor: not-allowed !important;
+      pointer-events: none !important;
+      opacity: 0.85;
+      box-shadow: none !important;
     }
     .btn-print {
       background: #ffffff;
@@ -636,7 +667,7 @@ $activeMenu = 'fg-store.php';
       flex-direction: column;
       gap: 6px;
     }
-    .form-group.col-full {
+    .col-full, .form-group.col-full {
       grid-column: 1 / -1;
     }
     .form-group label {
@@ -793,16 +824,11 @@ $activeMenu = 'fg-store.php';
       <!-- Content Body -->
       <div class="content-body">
         
-        <!-- 3 Simple Stats Cards (Identical to MIP & Child Part Pages) -->
-        <div class="stats-row">
+        <!-- 2 Simple Stats Cards -->
+        <div class="stats-row-2">
           <div class="simple-card stat-box">
             <div class="stat-number completed" id="statTotalStock"><?php echo number_format($totalStock); ?></div>
             <div class="stat-title">Total FG Available Stock (Units)</div>
-          </div>
-
-          <div class="simple-card stat-box">
-            <div class="stat-number in-progress" id="statTodayInward"><?php echo number_format($todayInward); ?></div>
-            <div class="stat-title">Today's Inward Qty</div>
           </div>
 
           <div class="simple-card stat-box">
@@ -852,22 +878,30 @@ $activeMenu = 'fg-store.php';
               <table class="simple-table" id="fgTable">
                 <thead>
                   <tr>
-                    <th style="width: 60px; text-align: center;">Sr No.</th>
-                    <th style="min-width: 280px;">Part Code &amp; Name</th>
-                    <th style="width: 160px; text-align: center; white-space: nowrap;">Stock Quantity</th>
+                    <th style="width: 50px; text-align: center;">Sr No.</th>
+                    <th style="min-width: 170px;">Customer</th>
+                    <th style="min-width: 260px;">Part Code &amp; Name</th>
+                    <th style="width: 140px; text-align: center; white-space: nowrap;">Stock Quantity</th>
                     <th style="width: 150px; text-align: center; white-space: nowrap;">Action</th>
                   </tr>
                 </thead>
                 <tbody id="fgTableBody">
                   <?php if (empty($fgInventoryList)): ?>
                     <tr id="emptyFgRow">
-                      <td colspan="4" style="text-align: center; padding: 36px 20px; color: var(--text-sub);">
+                      <td colspan="5" style="text-align: center; padding: 36px 20px; color: var(--text-sub);">
                         No finished goods inventory recorded yet. Go to <strong>Inward Logs</strong> tab and click <strong>+ Inward FG</strong> to add stock.
                       </td>
                     </tr>
                   <?php else: ?>
                     <?php $sr = 1; ?>
                     <?php foreach ($fgInventoryList as $item): ?>
+                      <?php 
+                        $stockQty = floatval($item['total_ok_qty']);
+                        $isDispatched = ($stockQty <= 0);
+                        $badgeCls = 'in-stock';
+                        if ($stockQty <= 0) $badgeCls = 'zero-stock';
+                        elseif ($stockQty <= 35) $badgeCls = 'low-stock';
+                      ?>
                       <tr data-id="<?php echo htmlspecialchars($item['id']); ?>"
                           data-part_code="<?php echo htmlspecialchars($item['part_code']); ?>"
                           data-part_name="<?php echo htmlspecialchars($item['part_name']); ?>"
@@ -881,44 +915,47 @@ $activeMenu = 'fg-store.php';
                           data-batch_no="<?php echo htmlspecialchars($item['last_mip_no'] ?? ''); ?>"
                           data-production_date="<?php echo htmlspecialchars($item['production_date'] ?? ''); ?>"
                           data-inward_date="<?php echo htmlspecialchars($item['production_date'] ?? ''); ?>"
-                          data-status="Available">
+                          data-status="<?php echo $isDispatched ? 'Dispatched' : 'Available'; ?>">
                         
                         <td style="color: var(--text-sub); font-weight: 600; text-align: center;"><?php echo $sr++; ?></td>
                         
+                        <td style="white-space: nowrap;">
+                          <strong style="color: #1e293b; font-size: 0.90rem;">
+                            <?php echo htmlspecialchars(!empty($item['customer_name']) ? $item['customer_name'] : '-'); ?>
+                          </strong>
+                        </td>
+
                         <td>
                           <div style="font-weight: 700; color: var(--text-main); font-size: 0.95rem;">
                             <?php echo htmlspecialchars($item['part_code']); ?> - <?php echo htmlspecialchars($item['part_name']); ?>
                           </div>
-                          <?php if (!empty($item['customer_name'])): ?>
-                            <div style="margin-top: 4px; display: inline-flex; align-items: center; gap: 5px;">
-                              <span style="font-size: 0.72rem; color: #64748b; font-weight: 600;">Customer:</span>
-                              <span class="tag" style="background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; font-size: 0.74rem; font-weight: 700; padding: 1px 7px; border-radius: 4px;">
-                                <?php echo htmlspecialchars($item['customer_name']); ?>
+                          <div style="margin-top: 4px; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px;">
+                            <?php if (!empty($item['last_mip_no'])): ?>
+                              <span class="tag" style="background: #f8fafc; color: #334155; border: 1px solid #cbd5e1; font-size: 0.74rem; font-weight: 700; padding: 1px 7px; border-radius: 4px;">
+                                MIP: <?php echo htmlspecialchars($item['last_mip_no']); ?>
                               </span>
-                            </div>
-                          <?php endif; ?>
+                            <?php endif; ?>
+                            <?php if (!empty($item['has_rework_appended'])): ?>
+                              <span class="tag" style="background: #fef3c7; color: #92400e; border: 1px solid #fde68a; font-size: 0.72rem; font-weight: 700; padding: 1px 6px; border-radius: 4px;" title="Consolidated with Rework Runs">
+                                + Rework
+                              </span>
+                            <?php endif; ?>
+                          </div>
                         </td>
                         
                         <td style="text-align: center; white-space: nowrap;">
-                          <?php 
-                            $stockQty = floatval($item['total_ok_qty']);
-                            $badgeCls = 'in-stock';
-                            if ($stockQty <= 0) $badgeCls = 'zero-stock';
-                            elseif ($stockQty <= 35) $badgeCls = 'low-stock';
-                          ?>
                           <span class="qty-badge <?php echo $badgeCls; ?>"><?php echo formatCleanStock($stockQty); ?> <?php echo htmlspecialchars($item['uom'] ?? 'PCS'); ?></span>
-                          <?php if (!empty($item['variant_stock_details'])): ?>
-                            <div style="margin-top: 5px; display: flex; justify-content: center;">
-                              <?php echo renderVariantBadgesHtml($item['variant_stock_details']); ?>
-                            </div>
-                          <?php endif; ?>
                         </td>
 
                         <td style="text-align: center; white-space: nowrap;">
                           <div class="action-btns" style="justify-content: center;">
                             <button type="button" class="btn-view" title="View Stock Details">View</button>
                             <?php if (hasPermission('fg_store', 'create')): ?>
-                            <button type="button" class="btn-dispatch" title="Dispatch Part">Dispatch</button>
+                              <?php if ($isDispatched): ?>
+                                <button type="button" class="btn-dispatch btn-dispatched" disabled title="Part has been fully dispatched">Dispatched</button>
+                              <?php else: ?>
+                                <button type="button" class="btn-dispatch" title="Dispatch Part">Dispatch</button>
+                              <?php endif; ?>
                             <?php endif; ?>
                           </div>
                         </td>
@@ -1085,6 +1122,7 @@ $activeMenu = 'fg-store.php';
                           data-dispatch_date="<?php echo htmlspecialchars($dsp['dispatch_date']); ?>"
                           data-part_code="<?php echo htmlspecialchars($dsp['part_code']); ?>"
                           data-part_name="<?php echo htmlspecialchars($dsp['part_name']); ?>"
+                          data-batch_no="<?php echo htmlspecialchars($dsp['batch_no'] ?? ''); ?>"
                           data-customer="<?php echo htmlspecialchars($dsp['customer']); ?>"
                           data-dispatch_qty="<?php echo htmlspecialchars($dsp['dispatch_qty']); ?>"
                           data-variant_dispatch="<?php echo htmlspecialchars($dsp['variant_dispatch_details'] ?? ''); ?>"
@@ -1242,6 +1280,10 @@ $activeMenu = 'fg-store.php';
             <input type="hidden" id="work_order" value="">
             <input type="hidden" id="received_by" value="">
             <input type="hidden" id="remarks" value="">
+            <input type="hidden" id="is_append_rework" value="0">
+            <input type="hidden" id="pending_rework_ok" value="0">
+            <input type="hidden" id="pending_rework_runs" value="">
+            <input type="hidden" id="pending_rework_variants" value="">
 
           </div>
         </div>
@@ -1255,10 +1297,10 @@ $activeMenu = 'fg-store.php';
   </div>
 
   <!-- =========================================================
-       Modal 2: Multi-Item Dispatch FG (Clean Popup with Table)
+       Modal 2: Dispatch FG by Customer & In-Store MIP
        ========================================================= -->
   <div class="modal-overlay" id="dispatchModal">
-    <div class="modal-card" style="max-width: 820px; width: 95%;">
+    <div class="modal-card" style="max-width: 860px; width: 95%;">
       <div class="modal-header">
         <h3 class="modal-title">Dispatch Finished Goods</h3>
         <button type="button" class="modal-close-btn" id="closeDispatchModalBtn">&times;</button>
@@ -1268,66 +1310,85 @@ $activeMenu = 'fg-store.php';
         <div class="modal-body">
           <div class="popup-form-grid">
             
+            <!-- Step 1 & 2: Customer & In-Store MIP (Parallel in One Row) -->
             <div class="form-group">
-              <label for="disp_invoice">Invoice / DC Ref. *</label>
+              <label for="disp_customer" style="font-weight: 700; color: #0f172a;">Select Customer *</label>
+              <select id="disp_customer" class="form-control" required style="font-weight: 600; font-size: 0.95rem;">
+                <option value="">-- Choose Customer --</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="disp_mip" style="font-weight: 700; color: #0f172a;">Select In-Store MIP *</label>
+              <select id="disp_mip" class="form-control" required disabled style="font-weight: 600; font-size: 0.95rem;">
+                <option value="">-- Select Customer First --</option>
+              </select>
+            </div>
+
+            <!-- Step 3: Invoice / DC Ref. -->
+            <div class="form-group">
+              <label for="disp_invoice" style="font-weight: 700; color: #0f172a;">Invoice / DC Ref. *</label>
               <input type="text" id="disp_invoice" class="form-control" placeholder="e.g. INV-2026-101 / DC-104" required>
             </div>
             
+            <!-- Step 4: Dispatch Date -->
             <div class="form-group">
-              <label for="disp_date">Dispatch Date *</label>
+              <label for="disp_date" style="font-weight: 700; color: #0f172a;">Dispatch Date *</label>
               <input type="date" id="disp_date" class="form-control" required value="<?php echo date('Y-m-d'); ?>">
             </div>
 
-            <!-- Customer Field: Pre-filled & Non-editable (Readonly) as per requirement -->
+            <!-- Dispatched By -->
             <div class="form-group col-full">
-              <label for="disp_customer">Customer (Manufactured For) *</label>
-              <input type="text" id="disp_customer" class="form-control" readonly placeholder="Auto-populated from selected part (Non-editable)" style="background: #f8fafc; font-weight: 700; color: #1e293b; cursor: not-allowed; border-color: #cbd5e1;" required>
-            </div>
-
-            <div class="form-group col-full">
-              <label for="disp_by">Dispatched By *</label>
+              <label for="disp_by" style="font-weight: 700; color: #0f172a;">Dispatched By *</label>
               <input type="text" id="disp_by" class="form-control" placeholder="Store Executive" value="<?php echo htmlspecialchars($_SESSION['full_name'] ?? 'Store Executive'); ?>" required>
             </div>
 
-            <!-- Multiple Dispatch Items Table -->
-            <div class="form-group col-full" style="margin-top: 6px;">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <label style="margin: 0; font-weight: 700; color: var(--text-main);">Dispatch Parts List *</label>
-                <button type="button" class="btn-secondary" id="addDispItemRowBtn" style="padding: 4px 10px; font-size: 0.78rem; font-weight: 600;">
-                  + Add Row
-                </button>
-              </div>
+          </div><!-- /.popup-form-grid -->
 
-              <div style="overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; background: #fff;">
-                <table class="simple-table" id="dispItemsTable" style="margin: 0; width: 100%; border: none;">
-                  <thead style="background: #f8fafc;">
-                    <tr>
-                      <th style="width: 36px; text-align: center;">#</th>
-                      <th style="min-width: 220px;">Select Finished Part</th>
-                      <th style="width: 140px; text-align: center; white-space: nowrap;">Available Stock</th>
-                      <th style="min-width: 190px; text-align: center; white-space: nowrap;">Dispatch Qty</th>
-                      <th style="width: 36px; text-align: center;"></th>
-                    </tr>
-                  </thead>
-                  <tbody id="dispItemsTableBody">
-                    <!-- Dynamic rows inserted here -->
-                  </tbody>
-                </table>
-              </div>
+          <!-- Step 5: Data Load Section (Full Width Table) -->
+          <div id="dispDataLoadSection" style="display: none; width: 100%; margin-top: 18px; border-top: 1px dashed #cbd5e1; padding-top: 16px;">
+            
+            <!-- Hidden inputs for part data -->
+            <input type="hidden" id="disp_part_code">
+            <input type="hidden" id="disp_part_name">
+            <input type="hidden" id="disp_uom" value="PCS">
+            <input type="hidden" id="disp_max_qty" value="0">
+
+            <!-- Dispatch Items Table (Full Width) -->
+            <div style="width: 100%; border: 1px solid #cbd5e1; border-radius: 8px; overflow-x: auto; background: #fff; margin-bottom: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.03);">
+              <table class="simple-table" style="margin: 0; width: 100%; border-collapse: collapse;">
+                <thead style="background: #f8fafc; border-bottom: 1px solid #cbd5e1;">
+                  <tr>
+                    <th style="width: 50px; text-align: center; padding: 10px 8px; font-size: 0.78rem; text-transform: uppercase; color: #475569;">#</th>
+                    <th id="dispTableHeaderDesc" style="padding: 10px 14px; font-size: 0.78rem; text-transform: uppercase; color: #475569;">Part / Variant Description</th>
+                    <th style="width: 180px; text-align: center; white-space: nowrap; padding: 10px 12px; font-size: 0.78rem; text-transform: uppercase; color: #475569;">Available In-Store</th>
+                    <th style="width: 220px; text-align: right; white-space: nowrap; padding: 10px 14px; font-size: 0.78rem; text-transform: uppercase; color: #475569;">Dispatch Qty *</th>
+                  </tr>
+                </thead>
+                <tbody id="dispVariantsTableBody">
+                  <!-- Rendered dynamically -->
+                </tbody>
+              </table>
             </div>
 
-            <!-- General Remarks -->
-            <div class="form-group col-full">
-              <label for="disp_remarks">Remarks</label>
-              <input type="text" id="disp_remarks" class="form-control" placeholder="Optional notes for this delivery challan">
+            <!-- Total Dispatch Summary Banner -->
+            <div style="display: flex; justify-content: space-between; align-items: center; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 12px 16px; width: 100%; box-sizing: border-box;">
+              <span style="font-size: 0.92rem; font-weight: 700; color: #166534;">Total Dispatch Quantity:</span>
+              <strong id="dispTotalQtySummary" style="font-size: 1.25rem; color: #15803d; font-weight: 800;">0 PCS</strong>
             </div>
 
-          </div>
+            <!-- Consignment Remarks -->
+            <div class="form-group" style="margin-top: 14px; margin-bottom: 0; width: 100%;">
+              <label for="disp_remarks" style="font-weight: 600; color: #475569;">Remarks / Delivery Notes</label>
+              <input type="text" id="disp_remarks" class="form-control" placeholder="Optional notes (e.g. Vehicle No., Transporter, Destination)" style="width: 100%;">
+            </div>
+
+          </div><!-- /#dispDataLoadSection -->
         </div>
 
         <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
-          <span id="dispTotalSummary" style="font-weight: 600; color: var(--text-sub); font-size: 0.85rem;">
-            Total Parts: <strong id="dispItemsCount" style="color: var(--text-main);">0</strong>
+          <span id="dispStatusInfo" style="font-size: 0.82rem; color: var(--text-sub);">
+            Select Customer &amp; MIP to load dispatch quantities
           </span>
           <div style="display: flex; gap: 8px;">
             <button type="button" class="btn-secondary" id="cancelDispatchBtn">Cancel</button>
@@ -1535,12 +1596,23 @@ $activeMenu = 'fg-store.php';
         if (tblWrap) tblWrap.style.display = 'none';
 
         const reworkBadge = document.getElementById('fetchedReworkBadgeWrap');
-        if (reworkBadge) reworkBadge.style.display = 'none';
+        if (reworkBadge) {
+          reworkBadge.style.display = 'none';
+          reworkBadge.innerHTML = `<span style="background: #fef3c7; color: #92400e; border: 1px solid #fde68a; padding: 3px 9px; border-radius: 5px; font-weight: 700; font-size: 0.78rem;">+ Includes Rework Runs</span>`;
+        }
         const reworkNotice = document.getElementById('reworkConsolidationNotice');
-        if (reworkNotice) reworkNotice.style.display = 'none';
+        if (reworkNotice) {
+          reworkNotice.style.display = 'none';
+          reworkNotice.innerHTML = `&#9432; Completed Rework runs detected. On clicking <strong>Save Inward Entry</strong>, finished goods from rework will be consolidated and appended to the Parent FG stock.`;
+        }
 
         const custNameEl = document.getElementById('fetchedCustomerName');
         if (custNameEl) custNameEl.textContent = '-';
+
+        const statusTag = document.getElementById('fetchedMipStatusTag');
+        if (statusTag) {
+          statusTag.textContent = 'Data Loaded';
+        }
 
         const runsTbody = document.getElementById('fetchedRunsTableBody');
         if (runsTbody) runsTbody.innerHTML = '';
@@ -1549,16 +1621,24 @@ $activeMenu = 'fg-store.php';
           'inward_no', 'inward_date', 'part_code', 'part_name', 'customer_name',
           'batch_no', 'inward_qty', 'original_ok_qty', 'rework_ok_qty',
           'has_rework_appended', 'variant_details', 'rework_appended_info',
-          'parent_entry_id', 'uom', 'work_order', 'received_by', 'remarks'
+          'parent_entry_id', 'uom', 'work_order', 'received_by', 'remarks',
+          'is_append_rework', 'pending_rework_ok', 'pending_rework_runs', 'pending_rework_variants'
         ].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.value = '';
         });
 
+        const isAppEl = document.getElementById('is_append_rework');
+        if (isAppEl) isAppEl.value = '0';
+        const pendOkEl = document.getElementById('pending_rework_ok');
+        if (pendOkEl) pendOkEl.value = '0';
+
         if (saveInwardBtn) {
           saveInwardBtn.disabled = true;
           saveInwardBtn.style.opacity = '0.5';
           saveInwardBtn.style.cursor = 'not-allowed';
+          saveInwardBtn.textContent = 'Save Inward Entry';
+          saveInwardBtn.style.background = '';
         }
       }
 
@@ -1606,6 +1686,54 @@ $activeMenu = 'fg-store.php';
         return html;
       }
 
+      // Render structured variant breakdown table for View Modal
+      function renderVariantStockTableJs(variants, uom) {
+        if (!Array.isArray(variants) || variants.length === 0) {
+          return '<div style="color: #64748b; font-size: 0.82rem; font-style: italic; padding: 6px 0;">Standard Product (No Output Variants Defined)</div>';
+        }
+        const active = variants.filter(v => (parseFloat(v.qty) || 0) > 0);
+        if (active.length === 0) {
+          return '<div style="color: #64748b; font-size: 0.82rem; font-style: italic; padding: 6px 0;">No active variant stock available.</div>';
+        }
+        let html = `
+          <table style="width: 100%; border-collapse: collapse; font-size: 0.84rem; background: #ffffff; border-radius: 6px; overflow: hidden; border: 1px solid #e2e8f0;">
+            <thead>
+              <tr style="background: #f1f5f9; color: #475569; font-size: 0.74rem; text-transform: uppercase;">
+                <th style="padding: 7px 10px; text-align: left; border-bottom: 1px solid #e2e8f0;">Variant Name</th>
+                <th style="padding: 7px 10px; text-align: left; border-bottom: 1px solid #e2e8f0;">Variant Code</th>
+                <th style="padding: 7px 10px; text-align: right; border-bottom: 1px solid #e2e8f0;">In-Stock Qty</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        active.forEach(v => {
+          const qty = parseFloat(v.qty) || 0;
+          const name = (v.name || v.code || 'Variant').trim();
+          const code = (v.code || '-').trim();
+          const lower = name.toLowerCase();
+          let dot = '#64748b';
+          if (lower.includes('green') || lower.includes('grn')) dot = '#10b981';
+          else if (lower.includes('yellow') || lower.includes('yel')) dot = '#f59e0b';
+          else if (lower.includes('red')) dot = '#ef4444';
+          else if (lower.includes('blue')) dot = '#3b82f6';
+
+          html += `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 10px; font-weight: 700; color: #1e293b;">
+                <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${dot}; margin-right: 6px;"></span>
+                ${escapeHtml(name)}
+              </td>
+              <td style="padding: 8px 10px; color: #64748b; font-family: monospace;">${escapeHtml(code)}</td>
+              <td style="padding: 8px 10px; text-align: right; font-weight: 800; color: #0f172a;">
+                ${formatCleanStockJs(qty)} <span style="font-size: 0.72rem; color: #64748b; font-weight: 500;">${escapeHtml(uom || 'PCS')}</span>
+              </td>
+            </tr>
+          `;
+        });
+        html += '</tbody></table>';
+        return html;
+      }
+
       // Fetch Scanned MIP from production_entry table (Parent + any Rework batches)
       async function fetchScannedMip(code) {
         const query = (code || '').trim();
@@ -1624,11 +1752,15 @@ $activeMenu = 'fg-store.php';
           if (resJson.success && resJson.data && resJson.data.mip_no) {
             const match = resJson.data;
 
-            // ── Duplicate Inward check ──────────────────────────────────
-            if (match.already_inwarded === true) {
+            // ── Duplicate Inward check & Append Remaining Rework logic ───────────
+            const isAlreadyInwarded = match.already_inwarded === true;
+            const canAppendRework = match.can_append_rework === true;
+
+            if (isAlreadyInwarded && !canAppendRework) {
               const inwardRef = match.inward_ref ? ` (Ref: ${match.inward_ref})` : '';
+              const inwQtyStr = formatCleanStockJs(match.inward_ok_qty || match.previously_inwarded_qty);
               showToast(
-                `MIP "${match.mip_no}" has already been inwarded into FG Store${inwardRef}. Duplicate inward is not allowed.`,
+                `MIP "${match.mip_no}" is already fully inwarded into FG Store${inwardRef} (${inwQtyStr} ${match.uom || 'PCS'}). No new pending rework output found.`,
                 'error'
               );
               if (scanMipInput) {
@@ -1638,7 +1770,7 @@ $activeMenu = 'fg-store.php';
               clearMipScan();
               return;
             }
-            // ───────────────────────────────────────────────────────────
+            // ───────────────────────────────────────────────────────────────────
 
             const pCode = match.part_code || '';
             const pName = match.part_name || pCode;
@@ -1647,23 +1779,161 @@ $activeMenu = 'fg-store.php';
             const prodDate = match.production_date || new Date().toISOString().split('T')[0];
             const newInNo = 'FGI-' + new Date().getFullYear() + '-' + String(Math.floor(100 + Math.random() * 900));
 
-            const hasRework = match.has_rework && Array.isArray(match.rework_runs) && match.rework_runs.length > 0;
-            const parentOk = parseFloat(match.parent_ok_qty || 0);
-            const reworkOk = parseFloat(match.rework_total_ok || 0);
-            const totalOk = parseFloat(match.total_ok_qty || (parentOk + reworkOk));
-
             // Set Customer Banner
             const custEl = document.getElementById('fetchedCustomerName');
             if (custEl) custEl.textContent = customerName;
 
             const reworkBadge = document.getElementById('fetchedReworkBadgeWrap');
-            if (reworkBadge) reworkBadge.style.display = hasRework ? 'block' : 'none';
-
             const reworkNotice = document.getElementById('reworkConsolidationNotice');
-            if (reworkNotice) reworkNotice.style.display = hasRework ? 'block' : 'none';
+            const statusTag = document.getElementById('fetchedMipStatusTag');
 
-            // Populate Table of Runs
             let rowsHtml = '';
+
+            if (isAlreadyInwarded && canAppendRework) {
+              // ========================================================
+              // MODE: APPEND REMAINING REWORK TO EXISTING FG STOCK
+              // ========================================================
+              const prevInwQty = parseFloat(match.previously_inwarded_qty || match.inward_ok_qty || 0);
+              const pendingRwOk = parseFloat(match.pending_rework_ok || 0);
+              const newTotal = parseFloat(match.new_total_ok_qty || (prevInwQty + pendingRwOk));
+
+              if (reworkBadge) {
+                reworkBadge.innerHTML = `<span style="background: #fef3c7; color: #92400e; border: 1px solid #fde68a; padding: 4px 10px; border-radius: 5px; font-weight: 700; font-size: 0.78rem;">
+                  &#9888; In Stock: ${formatCleanStockJs(prevInwQty)} ${escapeHtml(uom)} &mdash; +${formatCleanStockJs(pendingRwOk)} ${escapeHtml(uom)} Rework Found
+                </span>`;
+                reworkBadge.style.display = 'block';
+              }
+
+              if (statusTag) {
+                statusTag.innerHTML = `<span style="background: #fef3c7; color: #92400e; font-weight: 700; padding: 2px 8px; border-radius: 4px; border: 1px solid #fde68a;">+ Append Remaining Rework</span>`;
+              }
+
+              // Row 1: Previously Inwarded FG
+              rowsHtml += `
+                <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+                  <td style="padding: 10px 12px; vertical-align: middle;">
+                    <strong style="color: var(--text-main); font-size: 0.92rem;">${escapeHtml(match.mip_no)}</strong>
+                    <div style="font-size: 0.72rem; color: #64748b;">Inward Ref: ${escapeHtml(match.inward_ref || '-')}</div>
+                  </td>
+                  <td style="padding: 10px 12px; vertical-align: middle;">
+                    <span class="tag" style="background: #f1f5f9; color: #475569; font-weight: 700; border: 1px solid #cbd5e1;">Already In Stock</span>
+                  </td>
+                  <td style="padding: 10px 12px; text-align: center; vertical-align: middle;">
+                    <strong style="color: #475569; font-size: 0.95rem;">${formatCleanStockJs(prevInwQty)} ${escapeHtml(uom)}</strong>
+                  </td>
+                  <td style="padding: 10px 12px; vertical-align: middle;">
+                    ${renderVariantPillsJs(match.previously_inwarded_variants)}
+                  </td>
+                </tr>
+              `;
+
+              // Row 2..N: Pending Rework Runs
+              if (Array.isArray(match.pending_rework_runs)) {
+                match.pending_rework_runs.forEach(r => {
+                  const rQty = parseFloat(r.ok_qty || 0);
+                  rowsHtml += `
+                    <tr style="background: #fffbeb;">
+                      <td style="padding: 10px 12px; vertical-align: middle;">
+                        <strong style="color: #92400e; font-size: 0.92rem;">${escapeHtml(match.mip_no)} <span style="font-size: 0.74rem; padding: 1px 6px; border-radius: 9999px; background: #fef3c7; color: #92400e; border: 1px solid #fde68a;">${escapeHtml(r.rework_label || 'R')}</span></strong>
+                        <div style="font-size: 0.72rem; color: #b45309;">Completed: ${escapeHtml(r.production_date || '-')}</div>
+                      </td>
+                      <td style="padding: 10px 12px; vertical-align: middle;">
+                        <span class="tag" style="background: #fef3c7; color: #92400e; font-weight: 700; border: 1px solid #fde68a;">+ Rework (${escapeHtml(r.rework_label || 'R')})</span>
+                      </td>
+                      <td style="padding: 10px 12px; text-align: center; vertical-align: middle;">
+                        <strong style="color: #b45309; font-size: 0.95rem;">+${formatCleanStockJs(rQty)} ${escapeHtml(uom)}</strong>
+                      </td>
+                      <td style="padding: 10px 12px; vertical-align: middle;">
+                        ${renderVariantPillsJs(r.variants)}
+                      </td>
+                    </tr>
+                  `;
+                });
+              }
+
+              // Row 3: Updated Consolidated Total
+              rowsHtml += `
+                <tr style="background: #ecfdf5; border-top: 2px solid #a7f3d0;">
+                  <td style="padding: 11px 12px; vertical-align: middle;">
+                    <strong style="color: #065f46; font-size: 0.95rem;">Updated Total FG Stock</strong>
+                  </td>
+                  <td style="padding: 11px 12px; vertical-align: middle;">
+                    <span class="tag" style="background: #d1fae5; color: #065f46; font-weight: 800; border: 1px solid #6ee7b7;">Consolidated FG</span>
+                  </td>
+                  <td style="padding: 11px 12px; text-align: center; vertical-align: middle;">
+                    <strong style="color: #047857; font-size: 1.1rem;">${formatCleanStockJs(newTotal)} ${escapeHtml(uom)}</strong>
+                  </td>
+                  <td style="padding: 11px 12px; vertical-align: middle;">
+                    ${renderVariantPillsJs(match.merged_all_variants)}
+                  </td>
+                </tr>
+              `;
+
+              if (reworkNotice) {
+                reworkNotice.innerHTML = `&#9432; <strong>Remaining Rework Detected:</strong> MIP "<strong>${escapeHtml(match.mip_no)}</strong>" is already in FG Store (${formatCleanStockJs(prevInwQty)} ${escapeHtml(uom)}). Found <strong>+${formatCleanStockJs(pendingRwOk)} ${escapeHtml(uom)}</strong> newly finished Rework quantity. Click <strong>+ Append Rework to FG Stock</strong> below to update inventory stock and append new output variants.`;
+                reworkNotice.style.display = 'block';
+              }
+
+              if (runsTbody) runsTbody.innerHTML = rowsHtml;
+
+              // Set hidden inputs
+              document.getElementById('is_append_rework').value = '1';
+              document.getElementById('pending_rework_ok').value = pendingRwOk;
+              document.getElementById('pending_rework_runs').value = JSON.stringify(match.pending_rework_runs || []);
+              document.getElementById('pending_rework_variants').value = JSON.stringify(match.pending_rework_variants || []);
+              document.getElementById('inward_no').value = match.inward_ref || newInNo;
+              document.getElementById('inward_date').value = prodDate;
+              document.getElementById('part_code').value = pCode;
+              document.getElementById('part_name').value = pName;
+              document.getElementById('customer_name').value = customerName;
+              document.getElementById('batch_no').value = match.mip_no || '';
+              document.getElementById('inward_qty').value = newTotal;
+              document.getElementById('original_ok_qty').value = prevInwQty;
+              document.getElementById('rework_ok_qty').value = pendingRwOk;
+              document.getElementById('has_rework_appended').value = '1';
+              document.getElementById('variant_details').value = JSON.stringify(match.merged_all_variants || []);
+              document.getElementById('rework_appended_info').value = JSON.stringify(match.all_rework_runs || []);
+              document.getElementById('parent_entry_id').value = match.parent_entry_id || '';
+              document.getElementById('uom').value = uom;
+              document.getElementById('work_order').value = match.work_order || '';
+              document.getElementById('received_by').value = match.received_by || match.operator_name || '';
+              document.getElementById('remarks').value = `Appended +${formatCleanStockJs(pendingRwOk)} ${uom} rework to existing stock (${formatCleanStockJs(prevInwQty)} ${uom}) for ${customerName}`;
+
+              // Configure Save Button
+              if (saveInwardBtn) {
+                saveInwardBtn.disabled = false;
+                saveInwardBtn.style.opacity = '1';
+                saveInwardBtn.style.cursor = 'pointer';
+                saveInwardBtn.textContent = `+ Append Rework (+${formatCleanStockJs(pendingRwOk)} ${uom})`;
+                saveInwardBtn.style.background = '#059669';
+              }
+
+              if (tblWrap) tblWrap.style.display = 'block';
+              showToast(`MIP "${match.mip_no}" is already in stock. Found +${formatCleanStockJs(pendingRwOk)} ${uom} new Rework ready to append!`, 'warning');
+              return;
+            }
+
+            // ========================================================
+            // MODE: FRESH CONSOLIDATED INWARD (Parent + Any Rework)
+            // ========================================================
+            const hasRework = match.has_rework && Array.isArray(match.rework_runs) && match.rework_runs.length > 0;
+            const parentOk = parseFloat(match.parent_ok_qty || 0);
+            const reworkOk = parseFloat(match.rework_total_ok || 0);
+            const totalOk = parseFloat(match.total_ok_qty || (parentOk + reworkOk));
+
+            if (reworkBadge) {
+              reworkBadge.innerHTML = `<span style="background: #fef3c7; color: #92400e; border: 1px solid #fde68a; padding: 3px 9px; border-radius: 5px; font-weight: 700; font-size: 0.78rem;">+ Includes Rework Runs</span>`;
+              reworkBadge.style.display = hasRework ? 'block' : 'none';
+            }
+
+            if (reworkNotice) {
+              reworkNotice.innerHTML = `&#9432; Completed Rework runs detected. On clicking <strong>Save Inward Entry</strong>, finished goods from rework will be consolidated and appended to the Parent FG stock.`;
+              reworkNotice.style.display = hasRework ? 'block' : 'none';
+            }
+
+            if (statusTag) {
+              statusTag.innerHTML = 'Data Loaded';
+            }
 
             // Row 1: Parent Initial Run
             rowsHtml += `
@@ -1690,10 +1960,10 @@ $activeMenu = 'fg-store.php';
                 rowsHtml += `
                   <tr style="background: #fffbeb;">
                     <td style="padding: 9px 12px; vertical-align: middle;">
-                      <strong style="color: #92400e; font-size: 0.92rem;">${escapeHtml(match.mip_no)} (Run #${r.id})</strong>
+                      <strong style="color: #92400e; font-size: 0.92rem;">${escapeHtml(match.mip_no)} <span style="font-size: 0.74rem; padding: 1px 6px; border-radius: 9999px; background: #fef3c7; color: #92400e; border: 1px solid #fde68a;">${escapeHtml(r.rework_label || 'R')}</span></strong>
                     </td>
                     <td style="padding: 9px 12px; vertical-align: middle;">
-                      <span class="tag" style="background: #fef3c7; color: #92400e; font-weight: 700; border: 1px solid #fde68a;">Rework Run</span>
+                      <span class="tag" style="background: #fef3c7; color: #92400e; font-weight: 700; border: 1px solid #fde68a;">Rework (${escapeHtml(r.rework_label || 'R')})</span>
                     </td>
                     <td style="padding: 9px 12px; text-align: center; vertical-align: middle;">
                       <strong style="color: #b45309; font-size: 0.95rem;">+${formatCleanStockJs(rQty)} ${escapeHtml(uom)}</strong>
@@ -1727,6 +1997,10 @@ $activeMenu = 'fg-store.php';
             if (runsTbody) runsTbody.innerHTML = rowsHtml;
 
             // Set hidden inputs for saving
+            document.getElementById('is_append_rework').value = '0';
+            document.getElementById('pending_rework_ok').value = '0';
+            document.getElementById('pending_rework_runs').value = '[]';
+            document.getElementById('pending_rework_variants').value = '[]';
             document.getElementById('inward_no').value = newInNo;
             document.getElementById('inward_date').value = prodDate;
             document.getElementById('part_code').value = pCode;
@@ -1754,6 +2028,8 @@ $activeMenu = 'fg-store.php';
               saveInwardBtn.disabled = false;
               saveInwardBtn.style.opacity = '1';
               saveInwardBtn.style.cursor = 'pointer';
+              saveInwardBtn.textContent = 'Save Inward Entry';
+              saveInwardBtn.style.background = '';
             }
 
             const toastMsg = hasRework
@@ -1855,9 +2131,12 @@ $activeMenu = 'fg-store.php';
           }
         });
 
-        document.getElementById('statTotalStock').textContent = Math.round(totalStock).toLocaleString();
-        document.getElementById('statTodayInward').textContent = Math.round(todayInward).toLocaleString();
-        document.getElementById('statTotalDispatched').textContent = Math.round(totalDispatched).toLocaleString();
+        const statTotalStockEl = document.getElementById('statTotalStock');
+        if (statTotalStockEl) statTotalStockEl.textContent = Math.round(totalStock).toLocaleString();
+        const statTodayInwardEl = document.getElementById('statTodayInward');
+        if (statTodayInwardEl) statTodayInwardEl.textContent = Math.round(todayInward).toLocaleString();
+        const statTotalDispatchedEl = document.getElementById('statTotalDispatched');
+        if (statTotalDispatchedEl) statTotalDispatchedEl.textContent = Math.round(totalDispatched).toLocaleString();
 
         document.getElementById('countInventory').textContent = rows.length;
         if (inwardTableBody) document.getElementById('countInward').textContent = inwardTableBody.querySelectorAll('tr').length;
@@ -1889,15 +2168,19 @@ $activeMenu = 'fg-store.php';
         const wo = document.getElementById('work_order').value;
         const recBy = document.getElementById('received_by').value;
         const remarks = document.getElementById('remarks').value;
+        const isAppend = document.getElementById('is_append_rework') ? document.getElementById('is_append_rework').value === '1' : false;
+        const pendingRwOk = parseFloat(document.getElementById('pending_rework_ok')?.value || 0);
+        const pendingRwRuns = document.getElementById('pending_rework_runs')?.value || '[]';
+        const pendingRwVars = document.getElementById('pending_rework_variants')?.value || '[]';
 
-        if (inQty <= 0) {
+        if (inQty <= 0 && (!isAppend || pendingRwOk <= 0)) {
           showToast('Inward quantity must be greater than zero.', 'error');
           return;
         }
 
         if (saveInwardBtn) {
           saveInwardBtn.disabled = true;
-          saveInwardBtn.textContent = 'Saving Inward...';
+          saveInwardBtn.textContent = isAppend ? 'Appending Rework...' : 'Saving Inward...';
         }
 
         const payload = {
@@ -1917,7 +2200,11 @@ $activeMenu = 'fg-store.php';
           uom: uom,
           work_order: wo,
           received_by: recBy,
-          remarks: remarks
+          remarks: remarks,
+          is_append_rework: isAppend ? 1 : 0,
+          pending_rework_ok: pendingRwOk,
+          pending_rework_runs: pendingRwRuns,
+          pending_rework_variants: pendingRwVars
         };
 
         try {
@@ -1931,7 +2218,10 @@ $activeMenu = 'fg-store.php';
           const res = await resp.json();
 
           if (res.success) {
-            showToast(hasRework ? 'Finished Goods with Rework consolidated & saved successfully!' : 'Finished Goods inward saved successfully!', 'success');
+            const successMsg = isAppend
+              ? (res.message || `+${formatCleanStockJs(pendingRwOk)} ${uom} Rework appended to FG stock successfully!`)
+              : (hasRework ? 'Finished Goods with Rework consolidated & saved successfully!' : 'Finished Goods inward saved successfully!');
+            showToast(successMsg, 'success');
             closeInwardModal();
             setTimeout(() => {
               window.location.reload();
@@ -1940,222 +2230,263 @@ $activeMenu = 'fg-store.php';
             showToast(res.message || 'Error saving inward entry.', 'error');
             if (saveInwardBtn) {
               saveInwardBtn.disabled = false;
-              saveInwardBtn.textContent = 'Save Inward Entry';
+              saveInwardBtn.textContent = isAppend ? `+ Append Rework (+${formatCleanStockJs(pendingRwOk)} ${uom})` : 'Save Inward Entry';
             }
           }
         } catch (err) {
           showToast('Network error while saving: ' + err.message, 'error');
           if (saveInwardBtn) {
             saveInwardBtn.disabled = false;
-            saveInwardBtn.textContent = 'Save Inward Entry';
+            saveInwardBtn.textContent = isAppend ? `+ Append Rework (+${formatCleanStockJs(pendingRwOk)} ${uom})` : 'Save Inward Entry';
           }
         }
       });
 
-      // Multi-Item Dispatch Elements & Data
-      const fgInventoryData = <?php echo json_encode($fgInventoryList); ?>;
-      const openDispatchModalBtn = document.getElementById('openDispatchModalBtn');
-      const dispItemsTableBody = document.getElementById('dispItemsTableBody');
-      const addDispItemRowBtn = document.getElementById('addDispItemRowBtn');
-      const dispItemsCount = document.getElementById('dispItemsCount');
+      // =========================================================
+      // Finished Goods Dispatch by Customer & In-Store MIP
+      // Sequence: 1. Customer -> 2. In-Store MIP -> 3. Invoice -> 4. Date -> 5. Load Qty & Variants
+      // =========================================================
+      const availableMipsData = <?php echo json_encode($availableMipsForDispatch); ?>;
+      const dispCustomer = document.getElementById('disp_customer');
+      const dispMip = document.getElementById('disp_mip');
+      const dispInvoice = document.getElementById('disp_invoice');
+      const dispDate = document.getElementById('disp_date');
+      const dispBy = document.getElementById('disp_by');
+      const dispRemarks = document.getElementById('disp_remarks');
+      const dispDataLoadSection = document.getElementById('dispDataLoadSection');
+      const dispPartCode = document.getElementById('disp_part_code');
+      const dispPartName = document.getElementById('disp_part_name');
+      const dispUom = document.getElementById('disp_uom');
+      const dispMaxQty = document.getElementById('disp_max_qty');
+      const dispTableHeaderDesc = document.getElementById('dispTableHeaderDesc');
+      const dispVariantsTableBody = document.getElementById('dispVariantsTableBody');
+      const dispTotalQtySummary = document.getElementById('dispTotalQtySummary');
+      const dispStatusInfo = document.getElementById('dispStatusInfo');
       const confirmDispatchBtn = document.getElementById('confirmDispatchBtn');
 
-      function updateDispatchItemCount() {
-        if (!dispItemsTableBody) return;
-        const rows = dispItemsTableBody.querySelectorAll('tr');
-        if (dispItemsCount) dispItemsCount.textContent = rows.length;
-        rows.forEach((tr, idx) => {
-          const numCell = tr.querySelector('.disp-row-num');
-          if (numCell) numCell.textContent = idx + 1;
+      // Populate distinct customers from available in-store MIPs
+      function populateCustomerDropdown(preselectedCustomer = null) {
+        if (!dispCustomer) return;
+        const customers = [...new Set(availableMipsData.map(m => m.customer_name).filter(Boolean))].sort();
+        let custHtml = '<option value="">-- Choose Customer --</option>';
+        customers.forEach(c => {
+          const isSel = (preselectedCustomer && preselectedCustomer.toLowerCase() === c.toLowerCase()) ? 'selected' : '';
+          custHtml += `<option value="${escapeHtml(c)}" ${isSel}>${escapeHtml(c)}</option>`;
         });
+        dispCustomer.innerHTML = custHtml;
       }
 
-      function addDispatchItemRow(preselectedPartCode = null) {
-        if (!dispItemsTableBody) return;
+      // Handle Customer Selection -> Populate In-Store MIPs for that Customer
+      function onCustomerChanged(preselectedMip = null) {
+        const selectedCustomer = dispCustomer.value.trim();
+        if (!selectedCustomer) {
+          dispMip.disabled = true;
+          dispMip.innerHTML = '<option value="">-- Select Customer First --</option>';
+          dispDataLoadSection.style.display = 'none';
+          dispStatusInfo.textContent = 'Select Customer & MIP to load dispatch quantities';
+          return;
+        }
 
-        const row = document.createElement('tr');
-        const rowIndex = dispItemsTableBody.querySelectorAll('tr').length + 1;
+        const mipsForCust = availableMipsData.filter(m => m.customer_name.toLowerCase() === selectedCustomer.toLowerCase());
+        if (mipsForCust.length === 0) {
+          dispMip.disabled = true;
+          dispMip.innerHTML = '<option value="">No in-stock MIPs found for this customer</option>';
+          dispDataLoadSection.style.display = 'none';
+          dispStatusInfo.textContent = 'No available stock for this customer';
+          return;
+        }
 
-        // Build Part Options from fgInventoryData (only parts with stock > 0)
-        let partOptionsHtml = '<option value="">-- Select In-Stock Part --</option>';
-        fgInventoryData.forEach(p => {
-          const stock = parseFloat(p.total_ok_qty || 0);
-          if (stock > 0) {
-            const isSel = (preselectedPartCode && p.part_code === preselectedPartCode) ? 'selected' : '';
-            partOptionsHtml += `<option value="${escapeHtml(p.part_code)}" ${isSel} 
-              data-name="${escapeHtml(p.part_name)}" 
-              data-customer="${escapeHtml(p.customer_name || '')}" 
-              data-uom="${escapeHtml(p.uom || 'PCS')}" 
-              data-stock="${stock}" 
-              data-batch="${escapeHtml(p.last_mip_no || '')}" 
-              data-variants='${escapeHtml(p.variant_stock_details || "[]")}'>
-              ${escapeHtml(p.part_code)} - ${escapeHtml(p.part_name)} (${formatCleanStockJs(stock)} ${escapeHtml(p.uom || 'PCS')})
-            </option>`;
-          }
+        dispMip.disabled = false;
+        let mipHtml = '<option value="">-- Select In-Store MIP --</option>';
+        mipsForCust.forEach(m => {
+          const isSel = (preselectedMip && (preselectedMip === m.mip_no || preselectedMip === m.part_code)) ? 'selected' : '';
+          mipHtml += `<option value="${escapeHtml(m.mip_no)}" data-part="${escapeHtml(m.part_code)}" ${isSel}>
+            ${escapeHtml(m.mip_no)} &bull; ${escapeHtml(m.part_code)} - ${escapeHtml(m.part_name)} (${formatCleanStockJs(m.available_qty)} ${escapeHtml(m.uom)})
+          </option>`;
         });
+        dispMip.innerHTML = mipHtml;
 
-        row.innerHTML = `
-          <td class="disp-row-num" style="text-align: center; color: var(--text-sub); font-weight: 600; vertical-align: top; padding-top: 12px;">${rowIndex}</td>
-          <td style="vertical-align: top;">
-            <select class="form-control disp-row-part" style="width: 100%; font-size: 0.84rem;" required>
-              ${partOptionsHtml}
-            </select>
-            <input type="hidden" class="disp-row-part-name">
-            <input type="hidden" class="disp-row-customer">
-            <input type="hidden" class="disp-row-uom" value="PCS">
-            <input type="hidden" class="disp-row-batch" value="">
-          </td>
-          <td style="text-align: center; white-space: nowrap; vertical-align: top; padding-top: 12px;">
-            <span class="disp-row-avail" style="font-weight: 700; color: #059669; font-size: 0.86rem;">-</span>
-          </td>
-          <td style="vertical-align: top;">
-            <input type="number" class="form-control disp-row-qty" min="0.001" step="any" placeholder="Qty" style="text-align: right; font-weight: 700;" required disabled>
-            <div class="disp-row-variants-box" style="display: none; margin-top: 6px; padding: 7px 9px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; text-align: left;"></div>
-          </td>
-          <td style="text-align: center; vertical-align: top; padding-top: 10px;">
-            <button type="button" class="btn-delete-row" title="Remove Item" style="background: transparent; border: none; color: #ef4444; cursor: pointer; font-size: 1.15rem; line-height: 1; padding: 4px 6px;">
-              &times;
-            </button>
-          </td>
-        `;
+        if (preselectedMip) {
+          onMipChanged();
+        } else if (mipsForCust.length === 1) {
+          dispMip.selectedIndex = 1;
+          onMipChanged();
+        } else {
+          dispDataLoadSection.style.display = 'none';
+          dispStatusInfo.textContent = 'Please choose a MIP to load quantity details';
+        }
+      }
 
-        const partSelect = row.querySelector('.disp-row-part');
-        const availSpan = row.querySelector('.disp-row-avail');
-        const qtyInput = row.querySelector('.disp-row-qty');
-        const variantsBox = row.querySelector('.disp-row-variants-box');
-        const partNameInput = row.querySelector('.disp-row-part-name');
-        const customerInput = row.querySelector('.disp-row-customer');
-        const uomInput = row.querySelector('.disp-row-uom');
-        const batchInput = row.querySelector('.disp-row-batch');
-        const delBtn = row.querySelector('.btn-delete-row');
-        const dispCustomerMain = document.getElementById('disp_customer');
+      // Handle MIP Selection -> Load Part Details & Dispatch Quantity Breakdown
+      function onMipChanged() {
+        const selectedCustomer = dispCustomer.value.trim();
+        const selectedMip = dispMip.value.trim();
+        if (!selectedCustomer || !selectedMip) {
+          dispDataLoadSection.style.display = 'none';
+          dispStatusInfo.textContent = 'Select Customer & MIP to load dispatch quantities';
+          return;
+        }
 
-        function onPartChanged() {
-          const opt = partSelect.options[partSelect.selectedIndex];
-          if (!opt || !partSelect.value) {
-            availSpan.textContent = '-';
-            qtyInput.value = '';
-            qtyInput.disabled = true;
-            variantsBox.style.display = 'none';
-            variantsBox.innerHTML = '';
-            partNameInput.value = '';
-            customerInput.value = '';
-            batchInput.value = '';
-            if (dispItemsTableBody.querySelectorAll('tr').length <= 1 && dispCustomerMain) {
-              dispCustomerMain.value = '';
-            }
-            return;
-          }
+        const mipObj = availableMipsData.find(m => 
+          m.customer_name.toLowerCase() === selectedCustomer.toLowerCase() && 
+          m.mip_no === selectedMip
+        );
 
-          const stock = parseFloat(opt.dataset.stock || 0);
-          const uom = opt.dataset.uom || 'PCS';
-          const cust = opt.dataset.customer || '';
+        if (!mipObj) {
+          dispDataLoadSection.style.display = 'none';
+          showToast('Could not load details for selected MIP.', 'error');
+          return;
+        }
 
-          // Auto-populate Customer in the non-editable Customer input field
-          if (dispCustomerMain) {
-            dispCustomerMain.value = cust || 'General Customer';
-          }
+        // Populate hidden part details
+        dispPartCode.value = mipObj.part_code;
+        dispPartName.value = mipObj.part_name;
+        dispUom.value = mipObj.uom;
+        dispMaxQty.value = mipObj.available_qty;
 
-          partNameInput.value = opt.dataset.name || '';
-          customerInput.value = cust;
-          uomInput.value = uom;
-          batchInput.value = opt.dataset.batch || '';
-          availSpan.textContent = `${formatCleanStockJs(stock)} ${uom}`;
+        const variants = Array.isArray(mipObj.available_variants) ? mipObj.available_variants.filter(v => parseFloat(v.qty) > 0) : [];
 
-          // Parse variant breakdown
-          let variants = [];
-          try {
-            variants = JSON.parse(opt.dataset.variants || '[]');
-          } catch (e) {
-            variants = [];
-          }
+        let vTbodyHtml = '';
+        if (variants.length > 0) {
+          // Case 1: Part has Output Variants
+          if (dispTableHeaderDesc) dispTableHeaderDesc.textContent = 'Output Variant Breakdown';
 
-          const activeVariants = Array.isArray(variants) ? variants.filter(v => (parseFloat(v.qty) || 0) > 0) : [];
-
-          if (activeVariants.length > 0) {
-            // Render dynamic input fields for each variant
-            let vHtml = `<div style="font-size:0.72rem; font-weight:700; color:#475569; margin-bottom:5px; text-transform:uppercase;">Dispatch By Variant:</div>`;
-            activeVariants.forEach(v => {
-              const maxV = parseFloat(v.qty) || 0;
-              const vName = v.name || v.code || 'Var';
-              vHtml += `
-                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; gap:6px;">
-                  <span style="font-size:0.78rem; font-weight:600; color:#1e293b; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(vName)}">${escapeHtml(vName)}:</span>
-                  <div style="display:flex; align-items:center; gap:4px;">
-                    <input type="number" class="form-control disp-variant-input" data-code="${escapeHtml(v.code || '')}" data-name="${escapeHtml(vName)}" min="0" max="${maxV}" step="any" placeholder="0" style="width:72px; height:28px; padding:0 6px; font-size:0.8rem; text-align:right;">
-                    <span style="font-size:0.7rem; color:#64748b; white-space:nowrap;">/ ${formatCleanStockJs(maxV)}</span>
+          variants.forEach((v, idx) => {
+            const maxV = parseFloat(v.qty) || 0;
+            const vName = v.name || v.code || 'Variant';
+            vTbodyHtml += `
+              <tr>
+                <td style="text-align: center; vertical-align: middle; padding: 10px 8px; color: var(--text-sub); font-weight: 600;">
+                  ${idx + 1}
+                </td>
+                <td style="padding: 10px 14px; vertical-align: middle;">
+                  <strong style="color: #0f172a; font-size: 0.92rem;">${escapeHtml(vName)}</strong>
+                  ${v.code && v.code !== vName ? `<span style="font-size: 0.74rem; color: #64748b; margin-left: 6px;">(${escapeHtml(v.code)})</span>` : ''}
+                </td>
+                <td style="text-align: center; vertical-align: middle; padding: 10px 12px;">
+                  <span class="tag" style="background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; font-weight: 700; font-size: 0.86rem; padding: 4px 10px; border-radius: 4px;">
+                    ${formatCleanStockJs(maxV)} ${escapeHtml(mipObj.uom)}
+                  </span>
+                </td>
+                <td style="text-align: right; vertical-align: middle; padding: 10px 14px;">
+                  <div style="display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
+                    <input type="number" class="form-control disp-var-qty-input" 
+                           data-code="${escapeHtml(v.code || '')}" 
+                           data-name="${escapeHtml(vName)}" 
+                           min="0" max="${maxV}" step="any" placeholder="0" 
+                           style="width: 120px; height: 36px; padding: 4px 10px; font-size: 0.95rem; font-weight: 700; text-align: right;">
+                    <span style="font-size: 0.82rem; font-weight: 600; color: #64748b; min-width: 32px;">${escapeHtml(mipObj.uom)}</span>
                   </div>
+                </td>
+              </tr>
+            `;
+          });
+          dispVariantsTableBody.innerHTML = vTbodyHtml;
+
+          dispVariantsTableBody.querySelectorAll('.disp-var-qty-input').forEach(inp => {
+            inp.addEventListener('input', updateVariantTotal);
+          });
+          updateVariantTotal();
+        } else {
+          // Case 2: Part has NO Output Variants -> Render in the full width table
+          if (dispTableHeaderDesc) dispTableHeaderDesc.textContent = 'Finished Part Description';
+
+          vTbodyHtml = `
+            <tr>
+              <td style="text-align: center; vertical-align: middle; padding: 10px 8px; color: var(--text-sub); font-weight: 600;">
+                1
+              </td>
+              <td style="padding: 10px 14px; vertical-align: middle;">
+                <div style="font-weight: 700; color: #0f172a; font-size: 0.95rem;">${escapeHtml(mipObj.part_code)} - ${escapeHtml(mipObj.part_name)}</div>
+                <div style="font-size: 0.74rem; color: #475569; margin-top: 3px;">
+                  MIP Batch: <strong style="color: #4f46e5;">${escapeHtml(mipObj.mip_no)}</strong> &bull; Customer: <strong style="color: #166534;">${escapeHtml(mipObj.customer_name)}</strong>
                 </div>
-              `;
-            });
-            variantsBox.innerHTML = vHtml;
-            variantsBox.style.display = 'block';
+              </td>
+              <td style="text-align: center; vertical-align: middle; padding: 10px 12px;">
+                <span class="tag" style="background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; font-weight: 700; font-size: 0.86rem; padding: 4px 10px; border-radius: 4px;">
+                  ${formatCleanStockJs(mipObj.available_qty)} ${escapeHtml(mipObj.uom)}
+                </span>
+              </td>
+              <td style="text-align: right; vertical-align: middle; padding: 10px 14px;">
+                <div style="display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
+                  <input type="number" id="disp_direct_qty" class="form-control" 
+                         min="0.001" max="${mipObj.available_qty}" step="any" placeholder="Enter Qty" 
+                         style="width: 120px; height: 36px; padding: 4px 10px; font-size: 0.95rem; font-weight: 700; text-align: right;">
+                  <span style="font-size: 0.82rem; font-weight: 600; color: #64748b; min-width: 32px;">${escapeHtml(mipObj.uom)}</span>
+                </div>
+              </td>
+            </tr>
+          `;
+          dispVariantsTableBody.innerHTML = vTbodyHtml;
 
-            // Make main qty input readonly and auto-calculate sum from variant inputs
-            qtyInput.readOnly = true;
-            qtyInput.style.background = '#f1f5f9';
-            qtyInput.style.cursor = 'not-allowed';
-            qtyInput.placeholder = 'Sum of variants';
-            qtyInput.value = '';
-            qtyInput.disabled = false;
-
-            variantsBox.querySelectorAll('.disp-variant-input').forEach(vInp => {
-              vInp.addEventListener('input', function() {
-                let sum = 0;
-                variantsBox.querySelectorAll('.disp-variant-input').forEach(i => {
-                  sum += (parseFloat(i.value) || 0);
-                });
-                qtyInput.value = sum > 0 ? sum : '';
-              });
+          const directInp = document.getElementById('disp_direct_qty');
+          if (directInp) {
+            directInp.addEventListener('input', function() {
+              const q = parseFloat(directInp.value) || 0;
+              dispTotalQtySummary.textContent = `${formatCleanStockJs(q)} ${mipObj.uom}`;
             });
-          } else {
-            // No variants: allow direct entry in qtyInput
-            variantsBox.style.display = 'none';
-            variantsBox.innerHTML = '';
-            qtyInput.readOnly = false;
-            qtyInput.style.background = '#ffffff';
-            qtyInput.style.cursor = 'text';
-            qtyInput.placeholder = 'Qty';
-            qtyInput.disabled = false;
-            qtyInput.max = stock;
-            qtyInput.focus();
+            setTimeout(() => directInp.focus(), 100);
           }
+          dispTotalQtySummary.textContent = `0 ${mipObj.uom}`;
         }
 
-        partSelect.addEventListener('change', onPartChanged);
-
-        delBtn.addEventListener('click', function() {
-          const allRows = dispItemsTableBody.querySelectorAll('tr');
-          if (allRows.length > 1) {
-            row.remove();
-            updateDispatchItemCount();
-          } else {
-            partSelect.value = '';
-            onPartChanged();
-          }
-        });
-
-        dispItemsTableBody.appendChild(row);
-        updateDispatchItemCount();
-
-        if (preselectedPartCode) {
-          onPartChanged();
-        }
+        dispDataLoadSection.style.display = 'block';
+        dispStatusInfo.textContent = `Ready to dispatch from ${mipObj.mip_no}`;
       }
 
-      function openDispatchModal(preselectedPartCode = null) {
+      // Calculate Total Dispatch Qty from variants
+      function updateVariantTotal() {
+        let sum = 0;
+        const uom = dispUom.value || 'PCS';
+        dispVariantsTableBody.querySelectorAll('.disp-var-qty-input').forEach(inp => {
+          sum += (parseFloat(inp.value) || 0);
+        });
+        dispTotalQtySummary.textContent = `${formatCleanStockJs(sum)} ${uom}`;
+      }
+
+      // Open Dispatch Modal
+      function openDispatchModal(preselectedCustomer = null, preselectedMip = null, preselectedPartCode = null) {
         if (!dispatchModal) return;
         dispatchForm.reset();
-        dispItemsTableBody.innerHTML = '';
+        dispDataLoadSection.style.display = 'none';
+        dispTotalQtySummary.textContent = '0 PCS';
 
         const dDateInput = document.getElementById('disp_date');
         if (dDateInput) dDateInput.value = new Date().toISOString().split('T')[0];
 
-        const dispCustomerMain = document.getElementById('disp_customer');
-        if (dispCustomerMain) dispCustomerMain.value = '';
+        let targetCustomer = preselectedCustomer;
+        let targetMip = preselectedMip;
 
-        addDispatchItemRow(preselectedPartCode);
+        if (!targetCustomer && preselectedPartCode) {
+          const found = availableMipsData.find(m => m.part_code === preselectedPartCode);
+          if (found) {
+            targetCustomer = found.customer_name;
+            if (!targetMip) targetMip = found.mip_no;
+          }
+        }
+
+        populateCustomerDropdown(targetCustomer);
+
+        if (targetCustomer) {
+          dispCustomer.value = targetCustomer;
+          onCustomerChanged(targetMip);
+        } else {
+          dispMip.disabled = true;
+          dispMip.innerHTML = '<option value="">-- Select Customer First --</option>';
+          dispStatusInfo.textContent = 'Select Customer & MIP to load dispatch quantities';
+        }
+
         dispatchModal.classList.add('active');
+        if (dispInvoice) {
+          setTimeout(() => dispInvoice.focus(), 150);
+        }
+      }
+
+      if (dispCustomer) {
+        dispCustomer.addEventListener('change', () => onCustomerChanged());
+      }
+      if (dispMip) {
+        dispMip.addEventListener('change', onMipChanged);
       }
 
       document.querySelectorAll('.openDispatchModalTrigger').forEach(function(btn) {
@@ -2164,105 +2495,86 @@ $activeMenu = 'fg-store.php';
         });
       });
 
-      if (addDispItemRowBtn) {
-        addDispItemRowBtn.addEventListener('click', function() {
-          addDispatchItemRow();
-        });
-      }
-
-      // Handle Multi-Item Dispatch Form Submission
+      // Handle Dispatch Form Submission
       dispatchForm.addEventListener('submit', async function(e) {
         e.preventDefault();
 
-        const invRef = document.getElementById('disp_invoice').value.trim();
-        const dDate = document.getElementById('disp_date').value;
-        const dCustomer = document.getElementById('disp_customer').value.trim();
-        const dBy = document.getElementById('disp_by').value.trim();
-        const dRemarks = document.getElementById('disp_remarks').value.trim();
+        const dCustomer = dispCustomer.value.trim();
+        const dMip = dispMip.value.trim();
+        const invRef = dispInvoice.value.trim();
+        const dDate = dispDate.value;
+        const dBy = dispBy.value.trim();
+        const dRemarks = dispRemarks.value.trim();
 
+        if (!dCustomer) {
+          showToast('Please select a Customer.', 'error');
+          dispCustomer.focus();
+          return;
+        }
+        if (!dMip) {
+          showToast('Please select an in-store MIP.', 'error');
+          dispMip.focus();
+          return;
+        }
         if (!invRef) {
-          showToast('Please enter Invoice / Delivery Challan Ref.', 'error');
+          showToast('Please enter Invoice / DC Ref.', 'error');
+          dispInvoice.focus();
           return;
         }
 
-        const rows = dispItemsTableBody.querySelectorAll('tr');
-        if (rows.length === 0) {
-          showToast('Please add at least one part to dispatch.', 'error');
-          return;
-        }
+        const pCode = dispPartCode.value.trim();
+        const pName = dispPartName.value.trim();
+        const uom = dispUom.value.trim() || 'PCS';
+        const maxStock = parseFloat(dispMaxQty.value) || 0;
 
-        const items = [];
-        let validationError = null;
+        let totalDispatchQty = 0;
+        const variantDispatch = [];
 
-        rows.forEach((tr, i) => {
-          if (validationError) return;
-          const pCode = tr.querySelector('.disp-row-part').value.trim();
-          const pName = tr.querySelector('.disp-row-part-name').value.trim();
-          const uVal = tr.querySelector('.disp-row-uom').value.trim();
-          const bNo = tr.querySelector('.disp-row-batch').value.trim();
-          const qtyInput = tr.querySelector('.disp-row-qty');
-          const dQty = parseFloat(qtyInput.value) || 0;
-          const maxStock = parseFloat(qtyInput.max) || 0;
+        const varInputs = dispVariantsTableBody.querySelectorAll('.disp-var-qty-input');
+        if (varInputs.length > 0) {
+          let varValError = null;
+          varInputs.forEach(vInp => {
+            if (varValError) return;
+            const vQty = parseFloat(vInp.value) || 0;
+            const vMax = parseFloat(vInp.max) || 0;
+            const vCode = vInp.dataset.code || '';
+            const vName = vInp.dataset.name || vCode;
 
-          if (!pCode) {
-            validationError = `Row #${i + 1}: Please select a finished part.`;
-            return;
-          }
-          if (dQty <= 0) {
-            validationError = `Row #${i + 1} (${pCode}): Dispatch quantity must be greater than zero.`;
-            return;
-          }
-          if (maxStock > 0 && dQty > maxStock) {
-            validationError = `Row #${i + 1} (${pCode}): Dispatch quantity (${dQty}) exceeds available stock (${maxStock}).`;
-            return;
-          }
-
-          // Check if variant breakdown inputs exist in this row
-          const variantInputs = tr.querySelectorAll('.disp-variant-input');
-          const variantDispatch = [];
-          if (variantInputs.length > 0) {
-            let variantSum = 0;
-            variantInputs.forEach(vInp => {
-              const vQty = parseFloat(vInp.value) || 0;
-              const vMax = parseFloat(vInp.max) || 0;
-              const vCode = vInp.dataset.code || '';
-              const vName = vInp.dataset.name || vCode;
-
-              if (vQty > vMax) {
-                validationError = `Row #${i + 1} (${pCode}): Variant '${vName}' dispatch qty (${vQty}) exceeds available (${vMax}).`;
-                return;
-              }
-              if (vQty > 0) {
-                variantSum += vQty;
-                variantDispatch.push({
-                  code: vCode,
-                  name: vName,
-                  qty: vQty
-                });
-              }
-            });
-
-            if (validationError) return;
-            if (variantDispatch.length === 0) {
-              validationError = `Row #${i + 1} (${pCode}): Please enter dispatch quantity for at least one variant.`;
+            if (vQty > vMax) {
+              varValError = `Variant '${vName}' dispatch qty (${vQty}) exceeds available stock (${vMax}).`;
               return;
             }
-          }
-
-          items.push({
-            part_code: pCode,
-            part_name: pName,
-            customer: dCustomer,
-            dispatch_qty: dQty,
-            variant_dispatch: variantDispatch,
-            uom: uVal || 'PCS',
-            batch_no: bNo
+            if (vQty > 0) {
+              totalDispatchQty += vQty;
+              variantDispatch.push({
+                code: vCode,
+                name: vName,
+                qty: vQty
+              });
+            }
           });
-        });
 
-        if (validationError) {
-          showToast(validationError, 'error');
-          return;
+          if (varValError) {
+            showToast(varValError, 'error');
+            return;
+          }
+          if (totalDispatchQty <= 0) {
+            showToast('Please enter dispatch quantity for at least one variant.', 'error');
+            return;
+          }
+        } else {
+          const directInp = document.getElementById('disp_direct_qty');
+          totalDispatchQty = directInp ? (parseFloat(directInp.value) || 0) : 0;
+          if (totalDispatchQty <= 0) {
+            showToast('Please enter a valid dispatch quantity greater than 0.', 'error');
+            if (directInp) directInp.focus();
+            return;
+          }
+          if (totalDispatchQty > maxStock) {
+            showToast(`Dispatch quantity (${totalDispatchQty}) exceeds available stock (${maxStock}).`, 'error');
+            if (directInp) directInp.focus();
+            return;
+          }
         }
 
         if (confirmDispatchBtn) {
@@ -2277,7 +2589,15 @@ $activeMenu = 'fg-store.php';
           customer: dCustomer,
           dispatched_by: dBy,
           remarks: dRemarks,
-          items: items
+          items: [{
+            part_code: pCode,
+            part_name: pName,
+            customer: dCustomer,
+            dispatch_qty: totalDispatchQty,
+            variant_dispatch: variantDispatch,
+            uom: uom,
+            batch_no: dMip
+          }]
         };
 
         try {
@@ -2312,12 +2632,15 @@ $activeMenu = 'fg-store.php';
 
       // Print Delivery Challan (DC) Slip on Standard A4 format (Matching MIP Slip design)
       function printDeliveryChallanSlip(data) {
+        const customerName = data.customer || data.items?.[0]?.customer || 'General Customer';
+
         const items = Array.isArray(data.items) && data.items.length > 0 ? data.items : [{
           partCode: data.partCode || '',
           partName: data.partName || '',
           batchNo: data.batchNo || '',
           qty: parseFloat(data.qty || 0),
-          uom: data.uom || 'PCS'
+          uom: data.uom || 'PCS',
+          variants: data.variants || ''
         }];
 
         let totalQty = 0;
@@ -2326,14 +2649,69 @@ $activeMenu = 'fg-store.php';
 
         items.forEach((it, idx) => {
           totalQty += parseFloat(it.qty || 0);
+
+          let variantsList = [];
+          if (typeof it.variants === 'string' && it.variants.trim() !== '') {
+            try {
+              variantsList = JSON.parse(it.variants);
+            } catch (e) {
+              variantsList = [];
+            }
+          } else if (Array.isArray(it.variants)) {
+            variantsList = it.variants;
+          }
+
+          let variantsHtml = '';
+          if (Array.isArray(variantsList) && variantsList.length > 0) {
+            const activeVariants = variantsList.filter(v => (parseFloat(v.qty) || 0) > 0);
+            if (activeVariants.length > 0) {
+              variantsHtml = `
+                <div style="margin-top: 6px; border: 1px solid #94a3b8; border-radius: 4px; overflow: hidden; background: #ffffff;">
+                  <div style="padding: 4px 8px; background: #f1f5f9; font-size: 9.5px; font-weight: bold; color: #1e293b; text-transform: uppercase; border-bottom: 1px solid #94a3b8; display: flex; justify-content: space-between;">
+                    <span>Dispatched Goods Variant</span>
+                    <span>Quantity (${escapeHtml(it.uom || 'PCS')})</span>
+                  </div>
+                  <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+                    <tbody>
+              `;
+              activeVariants.forEach(v => {
+                const vQty = parseFloat(v.qty) || 0;
+                const vName = (v.name || v.code || 'Variant').trim();
+                const vCode = (v.code && v.code !== v.name) ? ` <span style="color: #64748b; font-size: 10px;">[${escapeHtml(v.code)}]</span>` : '';
+                variantsHtml += `
+                  <tr style="border-bottom: 1px dashed #cbd5e1;">
+                    <td style="padding: 4px 8px; border: none; color: #0f172a;">
+                      <strong style="color: #1e293b;">${escapeHtml(vName)}</strong>${vCode}
+                    </td>
+                    <td style="padding: 4px 8px; border: none; text-align: right; font-weight: bold; color: #1e40af;">
+                      ${formatCleanStockJs(vQty)} ${escapeHtml(it.uom || 'PCS')}
+                    </td>
+                  </tr>
+                `;
+              });
+              variantsHtml += `
+                    </tbody>
+                  </table>
+                </div>
+              `;
+            }
+          }
+
           itemRowsHtml += `
             <tr>
-              <td style="text-align: center; color: #475569;">${idx + 1}</td>
-              <td><strong>${escapeHtml(it.partCode)}</strong></td>
-              <td><strong>${escapeHtml(it.partName)}</strong></td>
-              <td style="text-align: center;">${escapeHtml(it.batchNo || '-')}</td>
-              <td style="text-align: center; font-weight: bold; color: #0f172a;">${formatCleanStockJs(it.qty)}</td>
-              <td style="text-align: center;">${escapeHtml(it.uom || 'PCS')}</td>
+              <td style="text-align: center; color: #475569; vertical-align: top; padding-top: 8px;">${idx + 1}</td>
+              <td style="vertical-align: top; padding-top: 8px;"><strong style="font-size: 12.5px;">${escapeHtml(it.partCode)}</strong></td>
+              <td style="vertical-align: top; padding-top: 8px;">
+                <div style="font-weight: bold; font-size: 12.5px; color: #0f172a;">${escapeHtml(it.partName)}</div>
+                ${variantsHtml}
+              </td>
+              <td style="text-align: center; vertical-align: top; padding-top: 8px;">
+                <strong style="color: #334155; font-size: 12px;">${escapeHtml(it.batchNo || '-')}</strong>
+              </td>
+              <td style="text-align: center; font-weight: bold; color: #0f172a; font-size: 13px; vertical-align: top; padding-top: 8px;">
+                ${formatCleanStockJs(it.qty)}
+              </td>
+              <td style="text-align: center; vertical-align: top; padding-top: 8px; color: #475569;">${escapeHtml(it.uom || 'PCS')}</td>
             </tr>
           `;
         });
@@ -2504,20 +2882,22 @@ $activeMenu = 'fg-store.php';
 
             <table class="meta-table">
               <tr>
+                <td class="lbl">Customer / Consignee:</td>
+                <td class="val"><strong style="color: #1e40af; font-size: 13px;">${escapeHtml(customerName)}</strong></td>
                 <td class="lbl">Invoice / DC Ref:</td>
-                <td class="val"><strong style="color: #4f46e5;">${escapeHtml(data.invoiceRef || '-')}</strong></td>
-                <td class="lbl">Dispatch Date:</td>
-                <td class="val"><strong>${formatDateDMY(data.dispatchDate)}</strong></td>
+                <td class="val"><strong style="color: #4f46e5; font-size: 13px;">${escapeHtml(data.invoiceRef || '-')}</strong></td>
               </tr>
               <tr>
-                <td class="lbl">Dispatched By:</td>
-                <td class="val"><strong>${escapeHtml(data.dispatchedBy || '-')}</strong></td>
+                <td class="lbl">Dispatch Date:</td>
+                <td class="val"><strong>${formatDateDMY(data.dispatchDate)}</strong></td>
                 <td class="lbl">Dispatch Status:</td>
                 <td class="val"><span style="color: #15803d; font-weight: bold;">DISPATCHED / OUTWARD</span></td>
               </tr>
               <tr>
+                <td class="lbl">Dispatched By:</td>
+                <td class="val"><strong>${escapeHtml(data.dispatchedBy || '-')}</strong></td>
                 <td class="lbl">Consignment Remarks:</td>
-                <td class="val" colspan="3">${escapeHtml(data.remarks || 'None')}</td>
+                <td class="val">${escapeHtml(data.remarks || 'None')}</td>
               </tr>
             </table>
 
@@ -2618,9 +2998,11 @@ $activeMenu = 'fg-store.php';
             items.push({
               partCode: r.dataset.part_code || '',
               partName: r.dataset.part_name || '',
-              batchNo: r.dataset.batch_no || '',
+              batchNo: r.dataset.batch_no || d.batch_no || '',
               qty: parseFloat(r.dataset.dispatch_qty || 0),
-              uom: r.dataset.uom || 'PCS'
+              uom: r.dataset.uom || 'PCS',
+              customer: r.dataset.customer || d.customer || '',
+              variants: r.dataset.variant_dispatch || ''
             });
           });
         } else {
@@ -2629,7 +3011,9 @@ $activeMenu = 'fg-store.php';
             partName: d.part_name || '',
             batchNo: d.batch_no || '',
             qty: parseFloat(d.dispatch_qty || 0),
-            uom: d.uom || 'PCS'
+            uom: d.uom || 'PCS',
+            customer: d.customer || '',
+            variants: d.variant_dispatch || ''
           });
         }
 
@@ -2638,6 +3022,7 @@ $activeMenu = 'fg-store.php';
           dispatchDate: d.dispatch_date,
           invoiceRef: d.invoice_ref,
           dispatchedBy: d.dispatched_by,
+          customer: d.customer || (items[0]?.customer || ''),
           remarks: d.remarks,
           items: items
         });
@@ -2664,7 +3049,7 @@ $activeMenu = 'fg-store.php';
               showToast('This part has zero stock available for dispatch.', 'warning');
               return;
             }
-            openDispatchModal(tr.dataset.part_code);
+            openDispatchModal(tr.dataset.customer, tr.dataset.mip_no, tr.dataset.part_code);
           });
         }
 
@@ -2695,6 +3080,7 @@ $activeMenu = 'fg-store.php';
         const dParts = (d.inward_date || d.production_date || '').split('-');
         const dateDMY = dParts.length === 3 ? (dParts[2] + '-' + dParts[1] + '-' + dParts[0]) : (d.inward_date || d.production_date || '-');
         const totalQty = parseFloat(d.ok_qty || d.available_stock || 0);
+        const isDispatched = (totalQty <= 0) || (d.status === 'Dispatched');
 
         let variants = [];
         try {
@@ -2722,7 +3108,7 @@ $activeMenu = 'fg-store.php';
             </div>
             <div>
               <span style="font-size: 0.78rem; color: var(--text-sub); display: block;">Total Available Stock</span>
-              <strong style="font-size: 1.25rem; color: #059669;">${formatCleanStockJs(totalQty)} ${escapeHtml(d.uom || 'PCS')}</strong>
+              <strong style="font-size: 1.25rem; color: ${isDispatched ? '#64748b' : '#059669'};">${formatCleanStockJs(totalQty)} ${escapeHtml(d.uom || 'PCS')}</strong>
               ${hasRework && parseFloat(d.rework_qty || 0) > 0 ? `
                 <div style="font-size: 0.74rem; color: #b45309; font-weight: 600; margin-top: 2px;">
                   (Orig: ${formatCleanStockJs(d.orig_qty || totalQty)} + Rework: ${formatCleanStockJs(d.rework_qty)})
@@ -2731,7 +3117,9 @@ $activeMenu = 'fg-store.php';
             </div>
             <div>
               <span style="font-size: 0.78rem; color: var(--text-sub); display: block;">Stock Status</span>
-              <span class="tag tag-available">Available</span>
+              ${isDispatched 
+                ? '<span class="tag" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; font-weight:700; padding:2px 8px; border-radius:4px; font-size:0.75rem;">Dispatched</span>' 
+                : '<span class="tag tag-available" style="font-weight:700; padding:2px 8px; border-radius:4px; font-size:0.75rem;">Available</span>'}
             </div>
             <div>
               <span style="font-size: 0.78rem; color: var(--text-sub); display: block;">Last Inward MIP</span>
@@ -2743,9 +3131,12 @@ $activeMenu = 'fg-store.php';
             </div>
 
             <!-- Output Variants Breakdown -->
-            <div style="grid-column: 1 / -1;">
-              <span style="font-size: 0.78rem; color: var(--text-sub); display: block; margin-bottom: 5px;">Output Variants Stock:</span>
-              ${renderVariantPillsJs(variants)}
+            <div style="grid-column: 1 / -1; background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 8px; padding: 12px 14px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 0.80rem; font-weight: 700; color: #334155; text-transform: uppercase; letter-spacing: 0.03em;">Output Goods Variants Stock Breakdown:</span>
+                <span style="font-size: 0.74rem; color: #64748b; font-weight: 600;">Total: <strong style="color: #0f172a;">${formatCleanStockJs(totalQty)} ${escapeHtml(d.uom || 'PCS')}</strong></span>
+              </div>
+              ${renderVariantStockTableJs(variants, d.uom || 'PCS')}
             </div>
 
             ${d.remarks ? `
@@ -2822,9 +3213,11 @@ $activeMenu = 'fg-store.php';
       if (dispatchFromViewBtn) {
         dispatchFromViewBtn.addEventListener('click', function() {
           if (currentActiveRow) {
+            const cust = currentActiveRow.dataset.customer;
+            const mip = currentActiveRow.dataset.mip_no;
             const pCode = currentActiveRow.dataset.part_code;
             closeViewModal();
-            openDispatchModal(pCode);
+            openDispatchModal(cust, mip, pCode);
           }
         });
       }

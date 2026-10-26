@@ -31,6 +31,7 @@ if ($method === 'GET') {
                    department, received_by, process_name, shift,
                    target_qty, ok_qty, rejected_qty, rework_qty,
                    operator_name, uom, status, entry_type, is_rework, rework_source_entry_id,
+                   rework_iteration, rework_label,
                    CONVERT(VARCHAR(19), created_at, 120) as created_at
             FROM production_entry
             ORDER BY id DESC
@@ -365,20 +366,35 @@ if ($method === 'POST') {
         // CREATE NEW ENTRY
         requirePermission('production', 'create');
         try {
+            // Determine rework iteration and label if this is a rework run
+            $reworkIteration = 0;
+            $reworkLabel = null;
+            if ($isRework && !empty($mipNo)) {
+                $stCountRw = $pdo->prepare("
+                    SELECT COUNT(*) FROM production_entry 
+                    WHERE LOWER(LTRIM(RTRIM(mip_no))) = LOWER(LTRIM(RTRIM(?))) 
+                      AND is_rework = 1
+                ");
+                $stCountRw->execute([$mipNo]);
+                $existingRwCount = intval($stCountRw->fetchColumn() ?: 0);
+                $reworkIteration = $existingRwCount + 1;
+                $reworkLabel = ($reworkIteration === 1) ? 'R' : ('R' . ($reworkIteration - 1));
+            }
+
             $insertSql = "
                 INSERT INTO production_entry (
                     mip_no, customer_name, customer_code, so_number, work_order, part_code, part_name,
                     department, received_by, process_name, shift,
                     target_qty, ok_qty, rejected_qty,
                     operator_name, uom, status,
-                    entry_type, is_rework, rework_source_entry_id,
+                    entry_type, is_rework, rework_source_entry_id, rework_iteration, rework_label,
                     created_at, updated_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?,
                     ?, ?, ?,
                     ?, ?, ?,
-                    ?, ?, ?,
+                    ?, ?, ?, ?, ?,
                     GETDATE(), GETDATE()
                 )
             ";
@@ -403,7 +419,9 @@ if ($method === 'POST') {
                 'New Line up',
                 $entryType,
                 $isRework,
-                $reworkSourceEntryId
+                $reworkSourceEntryId,
+                $reworkIteration,
+                $reworkLabel
             ]);
 
             $newId = (int)$pdo->lastInsertId();
@@ -474,6 +492,8 @@ if ($method === 'POST') {
                     'status' => 'New Line up',
                     'entry_type' => $entryType,
                     'is_rework' => $isRework,
+                    'rework_iteration' => $reworkIteration,
+                    'rework_label' => $reworkLabel,
                     'created_at' => date('Y-m-d H:i:s')
                 ]
             ]);

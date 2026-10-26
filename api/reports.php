@@ -66,8 +66,13 @@ try {
         }
 
         $sql = "
-            SELECT id, mip_no, is_rework, customer_name, so_number, part_code, part_name,
-                   process_name, target_qty, ok_qty, rejected_qty,
+            SELECT id, mip_no, is_rework, rework_iteration, rework_label, customer_name, so_number, part_code, part_name,
+                   target_qty, ok_qty,
+                   CASE 
+                       WHEN ISNULL(rework_qty, 0) > 0 THEN rework_qty 
+                       WHEN ISNULL(rejected_qty, 0) > 0 THEN rejected_qty 
+                       ELSE ISNULL((SELECT SUM(psl.rejected_qty) FROM production_stage_log psl WHERE psl.production_entry_id = production_entry.id), 0)
+                   END AS rework_qty,
                    operator_name, uom, status,
                    CONVERT(VARCHAR(16), created_at, 120) AS created_at
             FROM production_entry
@@ -84,10 +89,9 @@ try {
             'so_number' => 'SO Number',
             'part_code' => 'Part Code',
             'part_name' => 'Part Name',
-            'process_name' => 'Process Stage',
             'target_qty' => 'Target Plan',
             'ok_qty' => 'OK Output',
-            'rejected_qty' => 'Rework Qty',
+            'rework_qty' => 'Rework Qty',
             'operator_name' => 'Operator',
             'uom' => 'UOM',
             'status' => 'Status',
@@ -98,7 +102,7 @@ try {
         foreach ($rows as $r) {
             $totalTarget += floatval($r['target_qty']);
             $totalOk += floatval($r['ok_qty']);
-            $totalRej += floatval($r['rejected_qty']);
+            $totalRej += floatval($r['rework_qty']);
         }
         $totProduced = $totalOk + $totalRej;
         $yieldRate = $totProduced > 0 ? round(($totalOk / $totProduced) * 100, 1) : 100;
@@ -343,18 +347,13 @@ try {
     // 6. INVENTORY STOCKS REPORT
     // -------------------------------------------------------------
     elseif ($reportType === 'inventory') {
-        // Fetch combined inventory items (Excluding RM as hidden)
+        // Fetch Child Part inventory items only (Excluding Finished Goods)
         $sql = "
-            SELECT 'RM & Child Part' AS item_type, part_code AS code, part_name AS name,
+            SELECT 'Child Part' AS item_type, part_code AS code, part_name AS name,
                    current_stock, uom, status,
                    CONVERT(VARCHAR(19), updated_at, 120) AS last_updated
             FROM child_part_master
-            UNION ALL
-            SELECT 'Finished Goods (FG)' AS item_type, part_code AS code, part_name AS name,
-                   total_ok_qty AS current_stock, uom, 'Active' AS status,
-                   CONVERT(VARCHAR(19), updated_at, 120) AS last_updated
-            FROM fg_inventory
-            ORDER BY item_type, code
+            ORDER BY part_code ASC
         ";
         $stmt = $pdo->query($sql);
         $allRows = $stmt->fetchAll(PDO::FETCH_ASSOC);

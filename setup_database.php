@@ -478,6 +478,14 @@ try {
         BEGIN
             ALTER TABLE production_entry ALTER COLUMN shift NVARCHAR(50) NULL;
         END
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='production_entry' AND COLUMN_NAME='rework_label')
+        BEGIN
+            ALTER TABLE production_entry ADD rework_label NVARCHAR(20) NULL;
+        END
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='production_entry' AND COLUMN_NAME='rework_iteration')
+        BEGIN
+            ALTER TABLE production_entry ADD rework_iteration INT DEFAULT 0;
+        END
     END
     ";
     $pdoApp->exec($createPrdTableSql);
@@ -496,9 +504,20 @@ try {
             last_mip_no NVARCHAR(50) NULL,
             last_production_date DATE NULL,
             created_at DATETIME DEFAULT GETDATE(),
-            updated_at DATETIME DEFAULT GETDATE(),
-            CONSTRAINT UQ_fg_inv_part_code UNIQUE (part_code)
+            updated_at DATETIME DEFAULT GETDATE()
         );
+    END
+    IF EXISTS (SELECT * FROM sys.key_constraints WHERE name = 'UQ_fg_inv_part_code')
+    BEGIN
+        ALTER TABLE fg_inventory DROP CONSTRAINT UQ_fg_inv_part_code;
+    END
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='fg_inventory' AND COLUMN_NAME='customer_name')
+    BEGIN
+        ALTER TABLE fg_inventory ADD customer_name NVARCHAR(150) NULL;
+    END
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='fg_inventory' AND COLUMN_NAME='variant_stock_details')
+    BEGIN
+        ALTER TABLE fg_inventory ADD variant_stock_details NVARCHAR(MAX) NULL;
     END
     ";
     $pdoApp->exec($createFgInventoryTableSql);
