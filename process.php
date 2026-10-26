@@ -78,16 +78,43 @@ try {
         $mipData = $st->fetch(PDO::FETCH_ASSOC);
     }
 
-    // 4. Fallback to latest active material_issue if neither found
-    if (!$mipData && $mipNo === '' && $entryId <= 0) {
-        $st = $pdo->query("SELECT TOP 1 * FROM material_issue ORDER BY id DESC");
-        if ($st) {
-            $mipData = $st->fetch(PDO::FETCH_ASSOC);
+    // 4. Fallback lookup of production_entry by mip_no if not loaded by id
+    if (!$entryData && !empty($mipNo)) {
+        $stEntryFallback = $pdo->prepare("SELECT TOP 1 * FROM production_entry WHERE mip_no = ? ORDER BY id DESC");
+        $stEntryFallback->execute([$mipNo]);
+        $entryData = $stEntryFallback->fetch(PDO::FETCH_ASSOC);
+        if ($entryData) {
+            $entryDbId = intval($entryData['id']);
+            $entryDbCreatedAt = $entryData['created_at'] ?? '';
         }
     }
 
-    // 5. Populate variables
-    if ($mipData) {
+    // 5. Populate variables:
+    // IMPORTANT: production_entry is the primary record for a production batch run.
+    // Its target_qty represents the planned quantity for this run (e.g. 4 NOS for Rework, 20 NOS for regular).
+    // material_issue only provides master MIP details and fallback.
+    $isReworkEntry = false;
+    if ($entryData) {
+        $entryDbId = intval($entryData['id']);
+        $entryDbCreatedAt = $entryData['created_at'] ?? '';
+        $currentMipNo = $entryData['mip_no'] ?? ($mipNo ?: ($mipData['issue_no'] ?? 'MIP-001'));
+        if (!empty($entryData['part_code'])) $partCode = $entryData['part_code'];
+        if (!empty($entryData['part_name'])) $partName = $entryData['part_name'];
+        if (!empty($entryData['customer_name'])) $customerName = $entryData['customer_name'];
+        if (isset($entryData['target_qty']) && floatval($entryData['target_qty']) > 0) {
+            $issuedQty = floatval($entryData['target_qty']);
+        }
+        $soNumber = $entryData['so_number'] ?? ($entryData['work_order'] ?? ($mipData['so_number'] ?? ''));
+        $isReworkEntry = (!empty($entryData['is_rework']) || (($entryData['entry_type'] ?? '') === 'Rework'));
+
+        // Supplement missing metadata from material_issue if needed
+        if ($mipData) {
+            if (empty($partCode) && !empty($mipData['part_code'])) $partCode = $mipData['part_code'];
+            if (empty($partName) && !empty($mipData['part_name'])) $partName = $mipData['part_name'];
+            if (empty($customerName) && !empty($mipData['customer_name'])) $customerName = $mipData['customer_name'];
+            if (empty($soNumber) && !empty($mipData['so_number'])) $soNumber = $mipData['so_number'];
+        }
+    } elseif ($mipData) {
         $currentMipNo = $mipData['issue_no'];
         if (!empty($mipData['part_code'])) $partCode = $mipData['part_code'];
         if (!empty($mipData['part_name'])) $partName = $mipData['part_name'];
@@ -96,40 +123,11 @@ try {
             $issuedQty = floatval($mipData['issued_qty']);
         }
         if (!empty($mipData['so_number'])) $soNumber = $mipData['so_number'];
-    } elseif ($entryData) {
-        $currentMipNo = $entryData['mip_no'] ?? ($mipNo ?: 'MIP-001');
-        $entryDbId = $entryData['id'] ?? 0;
-        $entryDbCreatedAt = $entryData['created_at'] ?? '';
-        if (!empty($entryData['part_code'])) $partCode = $entryData['part_code'];
-        if (!empty($entryData['part_name'])) $partName = $entryData['part_name'];
-        if (!empty($entryData['customer_name'])) $customerName = $entryData['customer_name'];
-        if (isset($entryData['target_qty']) && floatval($entryData['target_qty']) > 0) {
-            $issuedQty = floatval($entryData['target_qty']);
-        }
-        $soNumber = $entryData['so_number'] ?? ($entryData['work_order'] ?? '');
     } else {
         $currentMipNo = $mipNo ?: 'MIP-001';
     }
 
-    // Fallback lookup of production_entry by mip_no
-    if (!$entryData && !empty($currentMipNo)) {
-        $stEntryFallback = $pdo->prepare("SELECT TOP 1 * FROM production_entry WHERE mip_no = ? ORDER BY id DESC");
-        $stEntryFallback->execute([$currentMipNo]);
-        $entryData = $stEntryFallback->fetch(PDO::FETCH_ASSOC);
-        if ($entryData) {
-            $entryDbId = intval($entryData['id']);
-            $entryDbCreatedAt = $entryData['created_at'] ?? '';
-            if (isset($entryData['target_qty']) && floatval($entryData['target_qty']) > 0) {
-                $issuedQty = floatval($entryData['target_qty']);
-            }
-            if (!empty($entryData['customer_name'])) $customerName = $entryData['customer_name'];
-            if (!empty($entryData['part_code'])) $partCode = $entryData['part_code'];
-            if (!empty($entryData['part_name'])) $partName = $entryData['part_name'];
-            if (!empty($entryData['so_number'])) $soNumber = $entryData['so_number'];
-        }
-    }
-
-    $targetQty = $issuedQty;
+    $targetQty = floatval($issuedQty);
 
     // 6. Query part_master for processes, BOM, output variants
     if ($partCode !== '') {
@@ -215,7 +213,7 @@ try {
         $stLogs->execute([$entryDbId]);
         $existingStageLogs = $stLogs->fetchAll(PDO::FETCH_ASSOC);
     } elseif (!empty($currentMipNo)) {
-        $stLogs = $pdo->prepare("SELECT * FROM production_stage_log WHERE mip_no = ? ORDER BY stage_order ASC, id ASC");
+        $stLogs = $pdo->prepare("SELECT * FROM production_stage_log WHERE mip_no = ? AND (production_entry_id IS NULL OR production_entry_id = 0) ORDER BY stage_order ASC, id ASC");
         $stLogs->execute([$currentMipNo]);
         $existingStageLogs = $stLogs->fetchAll(PDO::FETCH_ASSOC);
     }
@@ -335,6 +333,32 @@ if (empty($initialVariantBreakdown)) {
         'name' => $partName,
         'qty' => $totalFgOk
     ];
+}
+
+// Check if order workflow is already completed and has rejections
+$isCompletedInDb = false;
+$totalRejInDb = 0;
+$finalOkInDb = 0;
+
+if (!empty($existingStageLogs)) {
+    foreach ($existingStageLogs as $log) {
+        $totalRejInDb += floatval($log['rejected_qty'] ?? 0);
+        if (!empty($log['is_final_stage'])) {
+            $finalOkInDb = floatval($log['processed_qty'] ?? 0);
+        }
+    }
+    if (($finalOkInDb + $totalRejInDb) >= floatval($targetQty) && floatval($targetQty) > 0) {
+        $isCompletedInDb = true;
+    }
+}
+if (($entryData['status'] ?? '') === 'Completed') {
+    $isCompletedInDb = true;
+    if ($finalOkInDb == 0 && isset($entryData['ok_qty'])) {
+        $finalOkInDb = floatval($entryData['ok_qty']);
+    }
+    if ($totalRejInDb == 0 && isset($entryData['rejected_qty'])) {
+        $totalRejInDb = floatval($entryData['rejected_qty']);
+    }
 }
 
 $pageTitle = 'Process Workflow - ' . htmlspecialchars($partName);
@@ -500,7 +524,7 @@ $headerBackText = 'Back to DPR Entries';
       background-color: #fef2f2;
     }
     .bp-input.input-rej {
-      color: #dc2626;
+      color: #ea580c;
     }
     .bp-select-variant {
       width: 100%;
@@ -597,7 +621,12 @@ $headerBackText = 'Back to DPR Entries';
           <div class="part-summary-grid">
             <div class="summary-item">
               <span class="summary-lbl">MIP Number</span>
-              <span class="summary-val" style="color: #2563eb;"><?php echo htmlspecialchars($currentMipNo); ?></span>
+              <span class="summary-val" style="color: #2563eb; display: inline-flex; align-items: center; gap: 6px;">
+                <?php echo htmlspecialchars($currentMipNo); ?>
+                <?php if ($isReworkEntry): ?>
+                  <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>
+                <?php endif; ?>
+              </span>
             </div>
             <div class="summary-item">
               <span class="summary-lbl">Customer</span>
@@ -609,7 +638,12 @@ $headerBackText = 'Back to DPR Entries';
             </div>
             <div class="summary-item">
               <span class="summary-lbl">Target Quantity</span>
-              <span class="summary-val" style="color: #059669;"><?php echo $targetQty; ?> NOS</span>
+              <span class="summary-val" style="color: <?php echo $isReworkEntry ? '#ea580c' : '#059669'; ?>; font-weight: 800; display: inline-flex; align-items: center; gap: 6px;">
+                <?php echo floatval($targetQty); ?> NOS
+                <?php if ($isReworkEntry): ?>
+                  <span style="font-size: 0.74rem; font-weight: 700; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; padding: 1px 6px; border-radius: 4px;">(Rework Qty)</span>
+                <?php endif; ?>
+              </span>
             </div>
             <div class="summary-item">
               <span class="summary-lbl">SO Number</span>
@@ -649,12 +683,16 @@ $headerBackText = 'Back to DPR Entries';
                 Process Stages &amp; Quantity Progression
               </div>
               <div class="blueprint-sub">
-                Part-based workflow: Passed quantity of each process automatically becomes Available Quantity for the next process.
+                <?php if ($isReworkEntry): ?>
+                  <span style="color: #ea580c; font-weight: 700;">⟳ Rework Progression:</span> Passed quantity of each process automatically advances as Available Quantity for the next stage.
+                <?php else: ?>
+                  Part-based workflow: Passed quantity of each process automatically becomes Available Quantity for the next process.
+                <?php endif; ?>
               </div>
             </div>
 
-            <div id="blueprintSummaryPill" style="font-size: 0.80rem; font-weight: 700; color: #059669; background: #ecfdf5; padding: 5px 12px; border-radius: 20px; border: 1px solid #a7f3d0;">
-              Target: <?php echo $targetQty; ?> NOS
+            <div id="blueprintSummaryPill" style="font-size: 0.80rem; font-weight: 700; color: <?php echo $isReworkEntry ? '#c2410c' : '#059669'; ?>; background: <?php echo $isReworkEntry ? '#fff7ed' : '#ecfdf5'; ?>; padding: 5px 12px; border-radius: 20px; border: 1px solid <?php echo $isReworkEntry ? '#fed7aa' : '#a7f3d0'; ?>;">
+              Target: <?php echo floatval($targetQty); ?> NOS <?php if ($isReworkEntry): ?>(Rework)<?php endif; ?>
             </div>
           </div>
 
@@ -667,8 +705,8 @@ $headerBackText = 'Back to DPR Entries';
                   <th style="min-width: 180px;">Process Name</th>
                   <th style="width: 130px; text-align: center;">Available Qty</th>
                   <th style="width: 140px; text-align: center;">Pass Qty</th>
-                  <th style="width: 170px; text-align: center;">Reject Qty / Variant</th>
-                  <th style="width: 130px; text-align: center;">Rejected QTY</th>
+                  <th style="width: 170px; text-align: center;">Rework Qty / Variant</th>
+                  <th style="width: 130px; text-align: center;">Total Rework</th>
                 </tr>
               </thead>
               <tbody id="blueprintTableBody">
@@ -726,7 +764,7 @@ $headerBackText = 'Back to DPR Entries';
                   <th style="padding: 6px 10px;">Process Name</th>
                   <th style="padding: 6px 10px; text-align: center;">Input / Avail Qty</th>
                   <th style="padding: 6px 10px; text-align: center;">Passed Qty</th>
-                  <th style="padding: 6px 10px; text-align: center;">Rejected Qty</th>
+                  <th style="padding: 6px 10px; text-align: center;">Rework Qty</th>
                   <th style="padding: 6px 10px; text-align: center;">Remaining Qty</th>
                   <th style="padding: 6px 10px;">Operator</th>
                   <th style="padding: 6px 10px; text-align: center;">Status</th>
@@ -754,7 +792,7 @@ $headerBackText = 'Back to DPR Entries';
                       <td><strong style="color: #0f172a;"><?php echo htmlspecialchars($h['process_name']); ?></strong></td>
                       <td style="text-align: center; font-weight: 600;"><?php echo $hInput; ?> NOS</td>
                       <td style="text-align: center; font-weight: 700; color: #16a34a;"><?php echo $hPass; ?> NOS</td>
-                      <td style="text-align: center; font-weight: 600; color: <?php echo $hRej > 0 ? '#dc2626' : '#94a3b8'; ?>;">
+                      <td style="text-align: center; font-weight: 600; color: <?php echo $hRej > 0 ? '#ea580c' : '#94a3b8'; ?>;">
                         <?php echo $hRej > 0 ? $hRej . ' NOS' : '-'; ?>
                       </td>
                       <td style="text-align: center; font-weight: 600; color: <?php echo $hRem > 0 ? '#b45309' : '#64748b'; ?>;">
@@ -913,7 +951,7 @@ $headerBackText = 'Back to DPR Entries';
                    value="">
           `;
           colSavedRejHtml = `
-            <span class="val-rej-saved" id="lblSavedRej_${idx}" style="font-weight: 700; font-size: 0.95rem; color: ${st.cum_rej > 0 ? '#dc2626' : '#64748b'};">
+            <span class="val-rej-saved" id="lblSavedRej_${idx}" style="font-weight: 700; font-size: 0.95rem; color: ${st.cum_rej > 0 ? '#ea580c' : '#64748b'};">
               ${st.cum_rej || 0}
             </span>
           `;
@@ -1078,13 +1116,13 @@ $headerBackText = 'Back to DPR Entries';
             hasAnyInput = true;
           }
           if (pass + rej > st.available) {
-            showToast(`Validation error in '${st.name}': Pass Qty (${pass}) + Rejected Qty (${rej}) exceeds Available Qty (${st.available}).`, 'error');
+            showToast(`Validation error in '${st.name}': Pass Qty (${pass}) + Rework Qty (${rej}) exceeds Available Qty (${st.available}).`, 'error');
             return;
           }
         }
 
         if (!hasAnyInput) {
-          showToast('Please enter Pass Qty or Rejected Qty before saving.', 'error');
+          showToast('Please enter Pass Qty or Rework Qty before saving.', 'error');
           return;
         }
 
@@ -1195,85 +1233,118 @@ $headerBackText = 'Back to DPR Entries';
               stages: stagesPayload
             })
           });
-          const resJson = await res.json();
+
+          const rawText = await res.text();
+          let resJson = null;
+          try {
+            resJson = JSON.parse(rawText);
+          } catch(e) {
+            const startIdx = rawText.indexOf('{');
+            const endIdx = rawText.lastIndexOf('}');
+            if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+              try {
+                resJson = JSON.parse(rawText.substring(startIdx, endIdx + 1));
+              } catch(e2) {}
+            }
+          }
+
+          if (!resJson) {
+            console.error('Server response format error:', rawText);
+            showToast('Invalid server response format. Please try again.', 'error');
+            return;
+          }
 
           if (resJson.success) {
             // Update local state with saved values
             variantInventory = updatedVariantInventory;
 
-            stagesPayload.forEach((savedSt, idx) => {
-              const st = stageData[idx];
-              const isFinalRow = Boolean(st.is_final || idx === stageData.length - 1);
-              st.input_total = savedSt.input_qty;
-              st.cum_pass = savedSt.pass_qty;
-              st.cum_rej = savedSt.rejected_qty;
-              st.base_available = savedSt.available_qty;
-              st.available = savedSt.available_qty;
-              st.pass = null;
-              st.rej = null;
-              if (isFinalRow && savedSt.variant_code) {
-                st.variant_code = savedSt.variant_code;
-                st.variant_name = savedSt.variant_name;
-              }
-              st.has_saved = (st.cum_pass > 0 || st.cum_rej > 0);
-
-              // 1. UPDATE AVAILABLE QTY IN TABLE
-              const availEl = document.getElementById(`lblAvail_${idx}`);
-              if (availEl) {
-                availEl.textContent = st.available;
-              }
-
-              // 2. UPDATE REJECTED QTY IN TABLE (Shows saved rejected quantity for non-final stages)
-              const savedRejEl = document.getElementById(`lblSavedRej_${idx}`);
-              if (savedRejEl && !isFinalRow) {
-                savedRejEl.textContent = st.cum_rej || 0;
-                savedRejEl.style.color = st.cum_rej > 0 ? '#dc2626' : '#64748b';
-              }
-
-              // 3. EMPTY INPUT FIELDS AUTOMATICALLY AFTER SAVING
-              const passInput = document.getElementById(`inputPass_${idx}`);
-              const rejInput = document.getElementById(`inputRej_${idx}`);
-              if (passInput) {
-                passInput.value = '';
-                passInput.max = st.available;
-                passInput.classList.remove('input-error');
-              }
-              if (rejInput) {
-                rejInput.value = '';
-                rejInput.max = st.available;
-                rejInput.classList.remove('input-error');
-              }
-
-              const row = document.getElementById(`row_${idx}`);
-              if (row && st.has_saved) {
-                row.classList.add('row-saved');
-              }
-
-              // Append new history log for batches that had progress
-              if (savedSt.batch_pass > 0 || savedSt.batch_rej > 0) {
-                appendHistoryLog({
-                  time: `Today, ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase()}`,
-                  processName: st.name + (isFinalRow && savedSt.variant_code ? ` [${savedSt.variant_code}]` : ''),
-                  avail: savedSt.input_qty,
-                  pass: savedSt.batch_pass,
-                  rej: isFinalRow ? '-' : savedSt.batch_rej,
-                  rem: savedSt.available_qty,
-                  operator: globalOp
-                });
-              }
-            });
-
-            // Clear draft from localStorage
             try {
-              localStorage.removeItem(localBackupKey);
-            } catch(e) {}
+              stagesPayload.forEach((savedSt, idx) => {
+                const st = stageData[idx];
+                if (!st) return;
+                const isFinalRow = Boolean(st.is_final || idx === stageData.length - 1);
+                st.input_total = savedSt.input_qty;
+                st.cum_pass = savedSt.pass_qty;
+                st.cum_rej = savedSt.rejected_qty;
+                st.base_available = savedSt.available_qty;
+                st.available = savedSt.available_qty;
+                st.pass = null;
+                st.rej = null;
+                if (isFinalRow && savedSt.variant_code) {
+                  st.variant_code = savedSt.variant_code;
+                  st.variant_name = savedSt.variant_name;
+                }
+                st.has_saved = (st.cum_pass > 0 || st.cum_rej > 0);
 
-            updateFinalFgSummary();
-            showToast('✓ Process stages saved! Available quantities updated.', 'success');
+                // 1. UPDATE AVAILABLE QTY IN TABLE
+                const availEl = document.getElementById(`lblAvail_${idx}`);
+                if (availEl) {
+                  availEl.textContent = st.available;
+                }
+
+                // 2. UPDATE REJECTED/REWORK QTY IN TABLE (Shows saved rework quantity for non-final stages)
+                const savedRejEl = document.getElementById(`lblSavedRej_${idx}`);
+                if (savedRejEl && !isFinalRow) {
+                  savedRejEl.textContent = st.cum_rej || 0;
+                  savedRejEl.style.color = st.cum_rej > 0 ? '#ea580c' : '#64748b';
+                }
+
+                // 3. EMPTY INPUT FIELDS AUTOMATICALLY AFTER SAVING
+                const passInput = document.getElementById(`inputPass_${idx}`);
+                const rejInput = document.getElementById(`inputRej_${idx}`);
+                if (passInput) {
+                  passInput.value = '';
+                  passInput.max = st.available;
+                  passInput.classList.remove('input-error');
+                }
+                if (rejInput) {
+                  rejInput.value = '';
+                  rejInput.max = st.available;
+                  rejInput.classList.remove('input-error');
+                }
+
+                const row = document.getElementById(`row_${idx}`);
+                if (row && st.has_saved) {
+                  row.classList.add('row-saved');
+                }
+
+                // Append new history log for batches that had progress
+                if (savedSt.batch_pass > 0 || savedSt.batch_rej > 0) {
+                  appendHistoryLog({
+                    time: `Today, ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase()}`,
+                    processName: st.name + (isFinalRow && savedSt.variant_code ? ` [${savedSt.variant_code}]` : ''),
+                    avail: savedSt.input_qty,
+                    pass: savedSt.batch_pass,
+                    rej: isFinalRow ? '-' : savedSt.batch_rej,
+                    rem: savedSt.available_qty,
+                    operator: globalOp
+                  });
+                }
+              });
+
+              // Clear draft from localStorage
+              try {
+                localStorage.removeItem(localBackupKey);
+              } catch(e) {}
+
+              updateFinalFgSummary();
+            } catch(domErr) {
+              console.warn('DOM update error after saving:', domErr);
+            }
+
+            if (resJson.is_completed) {
+              showToast('🎉 All processes completed successfully! Output stored in FG.', 'success');
+              setTimeout(() => {
+                window.location.reload();
+              }, 1000);
+            } else {
+              showToast('✓ Process stages saved! Available quantities updated.', 'success');
+            }
           } else {
             showToast(resJson.message || 'Failed to save all stages.', 'error');
           }
         } catch (err) {
+          console.error('Error saving workflow:', err);
           showToast('Network error while saving process workflow.', 'error');
         } finally {
           btnSaveWorkflow.disabled = false;
@@ -1297,7 +1368,7 @@ $headerBackText = 'Back to DPR Entries';
         <td><strong style="color: #0f172a;">${escapeHtml(log.processName)}</strong></td>
         <td style="text-align: center; font-weight: 600;">${log.avail} NOS</td>
         <td style="text-align: center; font-weight: 700; color: #16a34a;">${log.pass} NOS</td>
-        <td style="text-align: center; font-weight: 600; color: ${log.rej > 0 ? '#dc2626' : '#94a3b8'};">
+        <td style="text-align: center; font-weight: 600; color: ${log.rej > 0 ? '#ea580c' : '#94a3b8'};">
           ${log.rej > 0 ? log.rej + ' NOS' : '-'}
         </td>
         <td style="text-align: center; font-weight: 600; color: ${log.rem > 0 ? '#b45309' : '#64748b'};">

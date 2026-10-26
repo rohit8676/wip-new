@@ -94,6 +94,8 @@ if ($method === 'GET') {
                    customer_name, customer_code, so_number,
                    part_code, part_name, issued_qty, uom, 
                    remarks, received_by,
+                   status, rework_qty, rework_completed_qty, rework_pending_qty,
+                   closure_status, closure_history,
                    child_parts_details, created_at, updated_at
             FROM material_issue
             ORDER BY id DESC
@@ -457,9 +459,9 @@ if ($method === 'POST') {
             $insertStmt = $pdo->prepare("
                 INSERT INTO material_issue (
                     issue_no, issue_date, customer_name, customer_code, so_number, part_code, part_name, issued_qty, uom,
-                    received_by, remarks, child_parts_details,
+                    received_by, remarks, status, rework_qty, rework_completed_qty, rework_pending_qty, child_parts_details,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Open', 0, 0, 0, ?, GETDATE(), GETDATE())
             ");
             $insertStmt->execute([
                 $issueNo, $issueDate, $customerName, $customerCode, $soNumber, $partCode, $partName, $issuedQty, $uom,
@@ -501,6 +503,11 @@ if ($method === 'POST') {
                     'uom' => $uom,
                     'received_by' => $receivedBy,
                     'remarks' => $remarks,
+                    'status' => 'Open',
+                    'rework_qty' => 0,
+                    'rework_completed_qty' => 0,
+                    'rework_pending_qty' => 0,
+                    'closure_status' => null,
                     'child_parts_details' => $childPartsJson
                 ]
             ]);

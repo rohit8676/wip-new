@@ -466,7 +466,7 @@ exit;
               <!-- Output Quantities -->
               <div class="section-divider-title" style="margin-top: 0;">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
-                1. Stage Output &amp; Rejection Reporting
+                1. Stage Output &amp; Rework Reporting
               </div>
 
               <div class="form-grid-2">
@@ -477,9 +477,9 @@ exit;
                 </div>
 
                 <div class="form-group">
-                  <label for="inputRejectedQty">Rejection Quantity (Scrapped at this stage)</label>
+                  <label for="inputRejectedQty">Rework Quantity (Defects to Rework)</label>
                   <input type="number" id="inputRejectedQty" class="form-control" step="any" min="0" value="0">
-                  <small style="color: #64748b; font-size: 0.74rem;">Defective/damaged material removed from production line.</small>
+                  <small style="color: #64748b; font-size: 0.74rem;">Parts requiring rework/correction.</small>
                 </div>
               </div>
 
@@ -499,7 +499,7 @@ exit;
                       <th style="padding: 8px 10px; text-align: center;">BOM Ratio</th>
                       <th style="padding: 8px 10px; text-align: center;">Available Qty</th>
                       <th style="padding: 8px 10px; text-align: center; width: 150px;">Child Processed Qty *</th>
-                      <th style="padding: 8px 10px; text-align: center; width: 130px;">Child Rejected Qty</th>
+                      <th style="padding: 8px 10px; text-align: center; width: 130px;">Child Rework Qty</th>
                       <th style="padding: 8px 10px; text-align: center;">UOM</th>
                     </tr>
                   </thead>
@@ -592,7 +592,7 @@ exit;
                     <th style="padding: 8px 12px;">Stage &amp; Process</th>
                     <th style="padding: 8px 12px; text-align: center;">Input Qty</th>
                     <th style="padding: 8px 12px; text-align: center;">Processed OK</th>
-                    <th style="padding: 8px 12px; text-align: center;">Rejected</th>
+                    <th style="padding: 8px 12px; text-align: center;">Rework</th>
                     <th style="padding: 8px 12px;">Operator (Designation)</th>
                     <th style="padding: 8px 12px;">Output Variant (Final)</th>
                   </tr>
@@ -1021,7 +1021,7 @@ exit;
         const remarks = document.getElementById('inputRemarks').value.trim();
 
         if (processedQty <= 0 && rejectedQty <= 0) {
-          showToast('Please enter Processed Qty or Rejection Qty.', 'error');
+          showToast('Please enter Processed Qty or Rework Qty.', 'error');
           return;
         }
 

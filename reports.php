@@ -1132,12 +1132,17 @@ if ($pdo) {
                   }
                 }
 
+                if (k === 'mip_no') {
+                  const isRw = Boolean(row.is_rework && (row.is_rework == 1 || row.is_rework === '1' || row.is_rework === true));
+                  return `<td><strong>${escapeHtml(val)}</strong>${isRw ? ' <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>' : ''}</td>`;
+                }
+
                 if (k === 'ok_qty') {
                   return `<td><strong style="color: #059669;">${escapeHtml(val)}</strong></td>`;
                 }
                 if (k === 'rejected_qty') {
                   const num = parseFloat(val);
-                  return `<td><span style="${num > 0 ? 'color: #dc2626; font-weight: 700;' : 'color: var(--rep-muted);'}">${escapeHtml(val)}</span></td>`;
+                  return `<td><span style="${num > 0 ? 'color: #ea580c; font-weight: 700;' : 'color: var(--rep-muted);'}">${escapeHtml(val)}</span></td>`;
                 }
 
                 return `<td>${escapeHtml(val)}</td>`;

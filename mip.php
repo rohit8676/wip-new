@@ -115,6 +115,8 @@ $mipList = [];
 $totalCount = 0;
 $totalQty = 0;
 $todayCount = 0;
+$totalPendingRework = 0;
+$totalReworkQty = 0;
 $nextIssueNo = 'MIP-001';
 
 if ($pdo) {
@@ -125,6 +127,8 @@ if ($pdo) {
                    customer_name, customer_code, so_number,
                    part_code, part_name, issued_qty, uom, 
                    received_by, remarks, 
+                   status, rework_qty, rework_completed_qty, rework_pending_qty,
+                   closure_status, closure_history,
                    child_parts_details, created_at, updated_at
             FROM material_issue
             ORDER BY id DESC
@@ -133,7 +137,12 @@ if ($pdo) {
             $rawMips = $stmtMips->fetchAll(PDO::FETCH_ASSOC);
             foreach ($rawMips as $m) {
                 $m['issued_qty'] = floatval($m['issued_qty'] ?? 0);
+                $m['rework_qty'] = floatval($m['rework_qty'] ?? 0);
+                $m['rework_completed_qty'] = floatval($m['rework_completed_qty'] ?? 0);
+                $m['rework_pending_qty'] = floatval($m['rework_pending_qty'] ?? 0);
                 $totalQty += $m['issued_qty'];
+                $totalPendingRework += $m['rework_pending_qty'];
+                $totalReworkQty += $m['rework_qty'];
                 $totalCount++;
                 if (($m['issue_date'] ?? '') === $todaySqlDate) {
                     $todayCount++;
@@ -235,6 +244,65 @@ $pageTitle = 'Material Issue for Production (MIP)';
     .btn-delete:hover {
       background: #fef2f2;
       border-color: #ef4444;
+    }
+
+    .btn-rework-entry {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      background: #ea580c;
+      border: 1px solid #c2410c;
+      border-radius: 4px;
+      font-size: 0.76rem;
+      font-weight: 700;
+      color: #ffffff !important;
+      text-decoration: none;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+      box-shadow: 0 1px 2px rgba(234, 88, 12, 0.25);
+    }
+    .btn-rework-entry:hover {
+      background: #c2410c;
+      transform: translateY(-1px);
+    }
+
+    .badge-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 9px;
+      border-radius: 9999px;
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+    }
+    .badge-status-rework-pending {
+      background: #fff7ed;
+      color: #c2410c;
+      border: 1px solid #fed7aa;
+    }
+    .badge-status-rework-active {
+      background: #faf5ff;
+      color: #7e22ce;
+      border: 1px solid #e9d5ff;
+    }
+    .badge-status-closed {
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid #cbd5e1;
+    }
+    .badge-status-in-prod {
+      background: #eff6ff;
+      color: #2563eb;
+      border: 1px solid #bfdbfe;
+    }
+    .badge-status-open {
+      background: #ecfdf5;
+      color: #059669;
+      border: 1px solid #a7f3d0;
     }
 
     /* Sub metadata below main text */
@@ -493,6 +561,52 @@ $pageTitle = 'Material Issue for Production (MIP)';
       color: var(--text-sub);
       font-size: 0.72rem;
     }
+
+    /* Compact Single-Row Stats Cards for MIP */
+    .mip-stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .mip-stats-row .stat-box {
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: var(--bg-white);
+      border: 1px solid var(--border);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .mip-stats-row .stat-box:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 3px 8px rgba(0, 0, 0, 0.05);
+    }
+    .mip-stats-row .stat-number {
+      font-size: 1.35rem;
+      font-weight: 700;
+      line-height: 1.15;
+    }
+    .mip-stats-row .stat-title {
+      font-size: 0.76rem;
+      font-weight: 500;
+      color: var(--text-sub);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    @media (max-width: 1024px) {
+      .mip-stats-row {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+    @media (max-width: 520px) {
+      .mip-stats-row {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
@@ -511,8 +625,8 @@ $pageTitle = 'Material Issue for Production (MIP)';
       <!-- Content Body -->
       <div class="content-body">
 
-        <!-- 3 Simple Stats Cards -->
-        <div class="stats-row">
+        <!-- 4 Stats Cards in Single Compact Row -->
+        <div class="stats-row mip-stats-row">
           <div class="simple-card stat-box">
             <div class="stat-number" id="statTotalIssues"><?php echo number_format($totalCount); ?></div>
             <div class="stat-title">Total Issues (MIP)</div>
@@ -526,6 +640,11 @@ $pageTitle = 'Material Issue for Production (MIP)';
           <div class="simple-card stat-box">
             <div class="stat-number in-progress" id="statTodayIssues"><?php echo number_format($todayCount); ?></div>
             <div class="stat-title">Today's Issues</div>
+          </div>
+
+          <div class="simple-card stat-box" style="border-left: 3px solid #ea580c;">
+            <div class="stat-number" style="color: #ea580c;" id="statPendingRework"><?php echo formatCleanStock($totalPendingRework); ?></div>
+            <div class="stat-title">Pending Rework (NOS)</div>
           </div>
         </div>
 
@@ -547,20 +666,21 @@ $pageTitle = 'Material Issue for Production (MIP)';
             <table class="simple-table" id="mipTable">
               <thead>
                 <tr>
-                  <th style="width: 50px; text-align: center;">Sr No.</th>
+                  <th style="width: 45px; text-align: center;">Sr No.</th>
                   <th>Customer</th>
-                  <th style="width: 140px;">Issue No. & Date</th>
+                  <th style="width: 135px;">Issue No. & Date</th>
                   <th>Part Description</th>
-                  <th style="width: 100px;">Issued Qty</th>
-                  <th style="width: 65px;">UOM</th>
+                  <th style="width: 90px; text-align: center;">Issued Qty</th>
+                  <th style="width: 55px; text-align: center;">UOM</th>
+                  <th style="width: 140px; text-align: center;">Status</th>
                   <th>Received By</th>
-                  <th style="width: 190px; text-align: center;">Action</th>
+                  <th style="width: 220px; text-align: center;">Action</th>
                 </tr>
               </thead>
               <tbody id="mipTableBody">
                 <?php if (empty($mipList)): ?>
                   <tr id="emptyTableRow">
-                    <td colspan="8" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
+                    <td colspan="9" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
                       No Material Issue records found in database. Click <strong>+ Issue Material</strong> to create your first production issue slip.
                     </td>
                   </tr>
@@ -577,6 +697,12 @@ $pageTitle = 'Material Issue for Production (MIP)';
                         data-part_name="<?php echo htmlspecialchars($item['part_name']); ?>"
                         data-issued_qty="<?php echo htmlspecialchars($item['issued_qty']); ?>"
                         data-uom="<?php echo htmlspecialchars($item['uom']); ?>"
+                        data-status="<?php echo htmlspecialchars($item['status'] ?? 'Open'); ?>"
+                        data-rework_qty="<?php echo htmlspecialchars($item['rework_qty'] ?? 0); ?>"
+                        data-rework_completed_qty="<?php echo htmlspecialchars($item['rework_completed_qty'] ?? 0); ?>"
+                        data-rework_pending_qty="<?php echo htmlspecialchars($item['rework_pending_qty'] ?? 0); ?>"
+                        data-closure_status="<?php echo htmlspecialchars($item['closure_status'] ?? ''); ?>"
+                        data-closure_history="<?php echo htmlspecialchars($item['closure_history'] ?? ''); ?>"
                         data-remarks="<?php echo htmlspecialchars($item['remarks'] ?? ''); ?>"
                         data-received_by="<?php echo htmlspecialchars($item['received_by'] ?? ''); ?>"
                         data-child_parts_details="<?php echo htmlspecialchars($item['child_parts_details'] ?? ''); ?>">
@@ -589,20 +715,46 @@ $pageTitle = 'Material Issue for Production (MIP)';
                       </td>
                       <td>
                         <strong><?php echo htmlspecialchars($item['issue_no']); ?></strong>
+                        <?php if (floatval($item['rework_qty'] ?? 0) > 0 || floatval($item['rework_pending_qty'] ?? 0) > 0): ?>
+                          <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>
+                        <?php endif; ?>
                         <span class="sub-meta"><?php echo htmlspecialchars(formatDateDMY($item['issue_date'])); ?></span>
                       </td>
                       <td>
                         <strong><?php echo htmlspecialchars($item['part_code']); ?></strong> - <?php echo htmlspecialchars($item['part_name']); ?>
                       </td>
-                      <td>
+                      <td style="text-align: center;">
                         <span class="qty-badge"><?php echo formatCleanStock($item['issued_qty']); ?></span>
                       </td>
-                      <td><?php echo htmlspecialchars($item['uom']); ?></td>
+                      <td style="text-align: center;"><?php echo htmlspecialchars($item['uom']); ?></td>
+                      <td style="text-align: center;">
+                        <?php 
+                          $rPending = floatval($item['rework_pending_qty'] ?? 0);
+                          $mStatus = trim($item['status'] ?? 'Open');
+
+                          if ($rPending > 0) {
+                              echo '<span class="badge-status badge-status-rework-pending" title="Parts pending rework"><span style="font-size: 0.85rem;">⟳</span> Rework Pending (' . intval($rPending) . ')</span>';
+                          } elseif ($mStatus === 'Rework In Progress') {
+                              echo '<span class="badge-status badge-status-rework-active" title="Rework in production"><span style="font-size: 0.85rem;">⟳</span> Rework Active</span>';
+                          } elseif ($mStatus === 'Closed') {
+                              echo '<span class="badge-status badge-status-closed">✓ Closed</span>';
+                          } elseif ($mStatus === 'In Production') {
+                              echo '<span class="badge-status badge-status-in-prod">In Production</span>';
+                          } else {
+                              echo '<span class="badge-status badge-status-open">Open</span>';
+                          }
+                        ?>
+                      </td>
                       <td>
                         <strong style="color: var(--text-main);"><?php echo htmlspecialchars(!empty($item['received_by']) ? $item['received_by'] : '-'); ?></strong>
                       </td>
                       <td style="text-align: center;">
-                        <div style="display: flex; gap: 4px; justify-content: center;">
+                        <div style="display: flex; gap: 4px; justify-content: center; align-items: center; flex-wrap: wrap;">
+                          <?php if (floatval($item['rework_pending_qty'] ?? 0) > 0): ?>
+                          <a href="production-add.php?mip=<?php echo urlencode($item['issue_no']); ?>&rework=1" class="btn-rework-entry" title="Log Rework Production Entry for <?php echo intval($item['rework_pending_qty']); ?> rework parts">
+                            <span style="font-size: 0.85rem;">⟳</span> Log Rework (<?php echo intval($item['rework_pending_qty']); ?>)
+                          </a>
+                          <?php endif; ?>
                           <button type="button" class="btn-view" title="View Details">View</button>
                           <button type="button" class="btn-print" title="Print Slip (A4)">Print</button>
                           <?php if (hasPermission('mip', 'update')): ?>
@@ -871,6 +1023,33 @@ $pageTitle = 'Material Issue for Production (MIP)';
         <div id="viewReceivedByRow" style="margin-top: 8px; font-size: 0.8rem; color: var(--text-sub); background: #fdfdfd; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); display: none;">
           <strong>Received By:</strong> <span id="viewReceivedByText"></span>
         </div>
+
+        <!-- Rework Section (Shows if MIP has pending or completed rework) -->
+        <div id="viewReworkSection" style="display: none; margin-top: 14px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 12px 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <div style="font-size: 0.84rem; font-weight: 700; color: #c2410c; display: flex; align-items: center; gap: 5px;">
+              <span>⟳</span> Rework Status & Allocation
+            </div>
+            <a href="#" id="viewLogReworkBtn" class="btn-rework-entry" style="font-size: 0.74rem; padding: 3px 8px;">
+              <span>⟳</span> Log Rework Entry
+            </a>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-size: 0.80rem; margin-top: 6px;">
+            <div>
+              <span style="color: #9a3412;">Total Rework Logged:</span>
+              <strong id="viewReworkTotal" style="color: #c2410c; display: block; font-size: 0.95rem;">0 NOS</strong>
+            </div>
+            <div>
+              <span style="color: #9a3412;">Pending to Log:</span>
+              <strong id="viewReworkPending" style="color: #ea580c; display: block; font-size: 0.95rem;">0 NOS</strong>
+            </div>
+            <div>
+              <span style="color: #9a3412;">Completed:</span>
+              <strong id="viewReworkCompleted" style="color: #16a34a; display: block; font-size: 0.95rem;">0 NOS</strong>
+            </div>
+          </div>
+          <div id="viewReworkHistoryNotes" style="font-size: 0.76rem; color: #7c2d12; margin-top: 8px; border-top: 1px dashed #fdba74; padding-top: 6px; display: none;"></div>
+        </div>
       </div>
 
       <div class="modal-footer">
@@ -967,6 +1146,9 @@ $pageTitle = 'Material Issue for Production (MIP)';
     }
 
     function updateTableRow(tr, item) {
+      const reworkPending = parseFloat(item.rework_pending_qty || 0);
+      const mStatus = (item.status || 'Open').trim();
+
       tr.setAttribute('data-id', item.id);
       tr.setAttribute('data-issue_no', item.issue_no);
       tr.setAttribute('data-issue_date', item.issue_date);
@@ -977,9 +1159,37 @@ $pageTitle = 'Material Issue for Production (MIP)';
       tr.setAttribute('data-part_name', item.part_name);
       tr.setAttribute('data-issued_qty', item.issued_qty);
       tr.setAttribute('data-uom', item.uom);
+      tr.setAttribute('data-status', mStatus);
+      tr.setAttribute('data-rework_qty', item.rework_qty || 0);
+      tr.setAttribute('data-rework_completed_qty', item.rework_completed_qty || 0);
+      tr.setAttribute('data-rework_pending_qty', reworkPending);
+      tr.setAttribute('data-closure_status', item.closure_status || '');
+      tr.setAttribute('data-closure_history', typeof item.closure_history === 'string' ? item.closure_history : JSON.stringify(item.closure_history || []));
       tr.setAttribute('data-remarks', item.remarks || '');
       tr.setAttribute('data-received_by', item.received_by || '');
       tr.setAttribute('data-child_parts_details', typeof item.child_parts_details === 'string' ? item.child_parts_details : JSON.stringify(item.child_parts_details || []));
+
+      let statusHtml = '';
+      if (reworkPending > 0) {
+        statusHtml = `<span class="badge-status badge-status-rework-pending" title="Parts pending rework"><span style="font-size:0.85rem;">⟳</span> Rework Pending (${reworkPending})</span>`;
+      } else if (mStatus === 'Rework In Progress') {
+        statusHtml = `<span class="badge-status badge-status-rework-active"><span style="font-size:0.85rem;">⟳</span> Rework Active</span>`;
+      } else if (mStatus === 'Closed') {
+        statusHtml = `<span class="badge-status badge-status-closed">✓ Closed</span>`;
+      } else if (mStatus === 'In Production') {
+        statusHtml = `<span class="badge-status badge-status-in-prod">In Production</span>`;
+      } else {
+        statusHtml = `<span class="badge-status badge-status-open">Open</span>`;
+      }
+
+      let reworkActionHtml = '';
+      if (reworkPending > 0) {
+        reworkActionHtml = `
+          <a href="production-add.php?mip=${encodeURIComponent(item.issue_no)}&rework=1" class="btn-rework-entry" title="Log Rework Production Entry for ${reworkPending} rework parts">
+            <span style="font-size:0.85rem;">⟳</span> Log Rework (${reworkPending})
+          </a>
+        `;
+      }
 
       tr.innerHTML = `
         <td style="color: var(--text-sub); font-weight: 600; text-align: center;">1</td>
@@ -989,20 +1199,23 @@ $pageTitle = 'Material Issue for Production (MIP)';
         </td>
         <td>
           <strong>${escapeHtml(item.issue_no)}</strong>
+          ${(parseFloat(item.rework_qty || 0) > 0 || parseFloat(item.rework_pending_qty || 0) > 0) ? '<span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>' : ''}
           <span class="sub-meta">${formatDateDMY(item.issue_date)}</span>
         </td>
         <td>
           <strong>${escapeHtml(item.part_code)}</strong> - ${escapeHtml(item.part_name)}
         </td>
-        <td>
+        <td style="text-align: center;">
           <span class="qty-badge">${formatStock(item.issued_qty)}</span>
         </td>
-        <td>${escapeHtml(item.uom)}</td>
+        <td style="text-align: center;">${escapeHtml(item.uom)}</td>
+        <td style="text-align: center;">${statusHtml}</td>
         <td>
           <strong style="color: var(--text-main);">${escapeHtml(item.received_by || '-')}</strong>
         </td>
         <td style="text-align: center;">
-          <div style="display: flex; gap: 4px; justify-content: center;">
+          <div style="display: flex; gap: 4px; justify-content: center; align-items: center; flex-wrap: wrap;">
+            ${reworkActionHtml}
             <button type="button" class="btn-view" title="View Details">View</button>
             <button type="button" class="btn-print" title="Print Slip (A4)">Print</button>
             <button type="button" class="btn-edit" title="Edit Entry">Edit</button>
@@ -1881,6 +2094,52 @@ $pageTitle = 'Material Issue for Production (MIP)';
           viewCpBody.innerHTML = rowsHtml;
         }
 
+        // Rework section in view modal
+        const rwSection = document.getElementById('viewReworkSection');
+        const rwBtn = document.getElementById('viewLogReworkBtn');
+        const rPend = parseFloat(data.reworkPendingQty || 0);
+        const rTot = parseFloat(data.reworkQty || 0);
+        const rComp = parseFloat(data.reworkCompletedQty || 0);
+
+        if (rwSection) {
+          if (rPend > 0 || rTot > 0 || rComp > 0) {
+            rwSection.style.display = 'block';
+            document.getElementById('viewReworkTotal').textContent = `${formatStock(rTot)} ${escapeHtml(data.uom)}`;
+            document.getElementById('viewReworkPending').textContent = `${formatStock(rPend)} ${escapeHtml(data.uom)}`;
+            document.getElementById('viewReworkCompleted').textContent = `${formatStock(rComp)} ${escapeHtml(data.uom)}`;
+
+            if (rPend > 0 && rwBtn) {
+              rwBtn.style.display = 'inline-flex';
+              rwBtn.href = `production-add.php?mip=${encodeURIComponent(data.issueNo)}&rework=1`;
+              rwBtn.innerHTML = `<span>⟳</span> Log Rework (${formatStock(rPend)})`;
+            } else if (rwBtn) {
+              rwBtn.style.display = 'none';
+            }
+
+            const notesEl = document.getElementById('viewReworkHistoryNotes');
+            if (notesEl) {
+              if (data.closureHistory) {
+                try {
+                  const hist = typeof data.closureHistory === 'string' ? JSON.parse(data.closureHistory) : data.closureHistory;
+                  if (Array.isArray(hist) && hist.length > 0) {
+                    const latest = hist[hist.length - 1];
+                    notesEl.style.display = 'block';
+                    notesEl.innerHTML = `<strong>Latest Log:</strong> ${escapeHtml(latest.event || latest.status)} — ${escapeHtml(latest.reason || '')} <span style="color:#a16207;">(${escapeHtml(latest.at || '')})</span>`;
+                  } else {
+                    notesEl.style.display = 'none';
+                  }
+                } catch(e) {
+                  notesEl.style.display = 'none';
+                }
+              } else {
+                notesEl.style.display = 'none';
+              }
+            }
+          } else {
+            rwSection.style.display = 'none';
+          }
+        }
+
         viewModal.classList.add('active');
         document.body.style.overflow = 'hidden';
       }
@@ -1897,6 +2156,12 @@ $pageTitle = 'Material Issue for Production (MIP)';
           partName: row.getAttribute('data-part_name') || '',
           qty: parseFloat(row.getAttribute('data-issued_qty') || 0),
           uom: row.getAttribute('data-uom') || 'NOS',
+          status: row.getAttribute('data-status') || 'Open',
+          reworkQty: parseFloat(row.getAttribute('data-rework_qty') || 0),
+          reworkCompletedQty: parseFloat(row.getAttribute('data-rework_completed_qty') || 0),
+          reworkPendingQty: parseFloat(row.getAttribute('data-rework_pending_qty') || 0),
+          closureStatus: row.getAttribute('data-closure_status') || '',
+          closureHistory: row.getAttribute('data-closure_history') || '',
           receivedBy: row.getAttribute('data-received_by') || '',
           remarks: row.getAttribute('data-remarks') || '',
           childPartsDetails: row.getAttribute('data-child_parts_details') || ''
@@ -1909,21 +2174,24 @@ $pageTitle = 'Material Issue for Production (MIP)';
         if (!row || row.id === 'emptyTableRow') return;
 
         // View Details
-        if (e.target.classList.contains('btn-view')) {
+        const viewBtn = e.target.closest('.btn-view');
+        if (viewBtn) {
           const rowData = getRowData(row);
           openViewModal(rowData);
           return;
         }
 
         // Print Slip
-        if (e.target.classList.contains('btn-print')) {
+        const printBtn = e.target.closest('.btn-print');
+        if (printBtn) {
           const rowData = getRowData(row);
           printIssueSlip(rowData);
           return;
         }
 
         // Edit
-        if (e.target.classList.contains('btn-edit')) {
+        const editBtn = e.target.closest('.btn-edit');
+        if (editBtn) {
           editItemId.value = row.getAttribute('data-id');
           document.getElementById('inputIssueNo').value = row.getAttribute('data-issue_no') || '';
           document.getElementById('inputIssueDate').value = row.getAttribute('data-issue_date') || '';
@@ -1959,12 +2227,14 @@ $pageTitle = 'Material Issue for Production (MIP)';
         }
 
         // Delete
-        if (e.target.classList.contains('btn-delete')) {
+        const deleteBtn = e.target.closest('.btn-delete');
+        if (deleteBtn) {
           pendingDeleteRow = row;
           pendingDeleteId = row.getAttribute('data-id');
           deleteTargetCode.textContent = row.getAttribute('data-issue_no') || 'this record';
           deleteModal.classList.add('active');
           document.body.style.overflow = 'hidden';
+          return;
         }
       });
 

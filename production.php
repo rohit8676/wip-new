@@ -192,6 +192,7 @@ if ($pdo) {
                    department, received_by, process_name, shift,
                    target_qty, ok_qty, rejected_qty,
                    operator_name, uom, status,
+                   is_rework, entry_type, rework_qty, rework_source_entry_id,
                    CONVERT(VARCHAR(10), created_at, 120) as entry_date,
                    CONVERT(VARCHAR(19), created_at, 120) as created_at
             FROM production_entry
@@ -203,7 +204,9 @@ if ($pdo) {
 
         foreach ($productionList as $item) {
             $totalProducedOk += floatval($item['ok_qty'] ?? 0);
-            $totalRejections += floatval($item['rejected_qty'] ?? 0);
+            if (empty($item['is_rework'])) {
+                $totalRejections += floatval($item['rejected_qty'] ?? 0);
+            }
             if (($item['entry_date'] ?? '') === $todaySqlDate) {
                 $todayOutput += floatval($item['ok_qty'] ?? 0);
             }
@@ -791,8 +794,8 @@ if (!function_exists('getPartProcessesList')) {
       background: linear-gradient(180deg, #ffffff 0%, #f0fdf4 100%);
     }
     .slider-stat-card.stat-card-rej {
-      border-left: 3px solid #dc2626;
-      background: linear-gradient(180deg, #ffffff 0%, #fef2f2 100%);
+      border-left: 3px solid #ea580c;
+      background: linear-gradient(180deg, #ffffff 0%, #fff7ed 100%);
     }
     .slider-stat-lbl {
       font-size: 0.68rem;
@@ -812,7 +815,7 @@ if (!function_exists('getPartProcessesList')) {
       color: #16a34a;
     }
     .slider-stat-val.val-rej {
-      color: #dc2626;
+      color: #ea580c;
     }
     .slider-close-btn {
       background: #f1f5f9;
@@ -1027,11 +1030,11 @@ if (!function_exists('getPartProcessesList')) {
       color: #ffffff;
     }
     .simple-stat-rej {
-      background: #faf5ff;
-      border-color: #f3e8ff;
+      background: #fff7ed;
+      border-color: #fed7aa;
     }
     .simple-stat-rej .simple-stat-pct {
-      background: #8b5cf6;
+      background: #ea580c;
       color: #ffffff;
     }
     .simple-stat-pending {
@@ -1060,7 +1063,7 @@ if (!function_exists('getPartProcessesList')) {
       background: #2563eb;
     }
     .simple-bar-seg.rej {
-      background: #8b5cf6;
+      background: #ea580c;
     }
     .simple-bar-seg.rem {
       background: #cbd5e1;
@@ -1173,7 +1176,7 @@ if (!function_exists('getPartProcessesList')) {
       margin-top: 1px;
     }
     .metric-val.val-pass { color: #16a34a; }
-    .metric-val.val-rej { color: #dc2626; }
+    .metric-val.val-rej { color: #ea580c; }
 
     /* Slider Footer */
     .slider-footer {
@@ -1226,10 +1229,10 @@ if (!function_exists('getPartProcessesList')) {
             <div class="stat-title">Quality Yield Rate (&ge; 98%)</div>
           </div>
 
-          <!-- Card 4: Total Rejections / Scrap -->
+          <!-- Card 4: Total Rework -->
           <div class="simple-card stat-box">
-            <div class="stat-number" style="color: #ef4444;" id="statTotalRejections"><?php echo number_format($totalRejections); ?> <span style="font-size:0.85rem; font-weight:500; color:var(--text-sub);">PCS</span></div>
-            <div class="stat-title">Total Rejections / Scrap</div>
+            <div class="stat-number" style="color: #ea580c;" id="statTotalRejections"><?php echo number_format($totalRejections); ?> <span style="font-size:0.85rem; font-weight:500; color:var(--text-sub);">PCS</span></div>
+            <div class="stat-title">Total Rework</div>
           </div>
 
         </div>
@@ -1272,6 +1275,7 @@ if (!function_exists('getPartProcessesList')) {
                   <th style="white-space: nowrap;">Customer</th>
                   <th style="white-space: nowrap;">Part Name</th>
                   <th style="text-align: center; white-space: nowrap;">Target Qty</th>
+                  <th style="text-align: center; white-space: nowrap;">OK Qty</th>
                   <th style="text-align: center; white-space: nowrap;">Status</th>
                   <th style="text-align: center; white-space: nowrap;">Action</th>
                 </tr>
@@ -1279,7 +1283,7 @@ if (!function_exists('getPartProcessesList')) {
               <tbody id="prdTableBody">
                 <?php if (empty($productionList)): ?>
                   <tr id="emptyTableRow">
-                    <td colspan="8" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
+                    <td colspan="9" style="text-align: center; padding: 40px 20px; color: var(--text-sub);">
                       No production entries found. Click <strong>+ Log Production</strong> to record shop-floor output.
                     </td>
                   </tr>
@@ -1300,9 +1304,21 @@ if (!function_exists('getPartProcessesList')) {
                         data-target_qty="<?php echo htmlspecialchars($item['target_qty']); ?>"
                         data-ok_qty="<?php echo htmlspecialchars($item['ok_qty']); ?>"
                         data-rejected_qty="<?php echo htmlspecialchars($item['rejected_qty'] ?? 0); ?>"
+                        data-rework_qty="<?php echo htmlspecialchars($item['rework_qty'] ?? 0); ?>"
+                        data-is_rework="<?php echo !empty($item['is_rework']) ? '1' : '0'; ?>"
                         data-operator_name="<?php echo htmlspecialchars($item['operator_name']); ?>"
                         data-uom="<?php echo htmlspecialchars($item['uom'] ?? 'PCS'); ?>"
-                        data-status="<?php echo htmlspecialchars($item['status'] ?? 'In Progress'); ?>"
+                        data-status="<?php 
+                          $rStat = trim($item['status'] ?? 'In Progress');
+                          $tq = floatval($item['target_qty'] ?? 0);
+                          $ok = floatval($item['ok_qty'] ?? 0);
+                          $rej = floatval($item['rejected_qty'] ?? 0);
+                          $rw = floatval($item['rework_qty'] ?? 0);
+                          $isDoneRow = (strcasecmp($rStat, 'Completed') === 0 || strcasecmp($rStat, 'Complete') === 0)
+                                     || ($tq > 0 && ($ok + $rej) >= $tq)
+                                     || ($tq > 0 && ($ok + $rej + $rw) >= $tq);
+                          echo htmlspecialchars($isDoneRow ? 'Completed' : $rStat); 
+                        ?>"
                         data-created_at="<?php echo !empty($item['created_at']) ? date('Y-m-d', strtotime($item['created_at'])) : date('Y-m-d'); ?>">
                       <td style="color: var(--text-sub); font-weight: 600; text-align: center;"><?php echo $sr++; ?></td>
                       <td style="white-space: nowrap; text-align: center; font-size: 0.85rem; font-weight: 600; color: #475569;">
@@ -1310,6 +1326,9 @@ if (!function_exists('getPartProcessesList')) {
                       </td>
                       <td style="white-space: nowrap;">
                         <strong style="color: #1e293b;"><?php echo htmlspecialchars($item['mip_no'] ?: '-'); ?></strong>
+                        <?php if (!empty($item['is_rework'])): ?>
+                          <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>
+                        <?php endif; ?>
                       </td>
                       <td style="white-space: nowrap;">
                         <span style="font-weight: 500; color: #334155;"><?php echo htmlspecialchars($item['customer_name'] ?: '-'); ?></span>
@@ -1320,13 +1339,19 @@ if (!function_exists('getPartProcessesList')) {
                       <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; color: #1e293b;">
                         <?php echo formatCleanNum($item['target_qty']); ?> <span style="font-size: 0.76rem; color: #64748b; font-weight: 500;"><?php echo htmlspecialchars($item['uom'] ?? 'PCS'); ?></span>
                       </td>
+                      <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 700; color: #16a34a;">
+                        <?php echo formatCleanNum($item['ok_qty'] ?? 0); ?> <span style="font-size: 0.76rem; color: #059669; font-weight: 500;"><?php echo htmlspecialchars($item['uom'] ?? 'PCS'); ?></span>
+                      </td>
                       <td style="text-align: center; white-space: nowrap;">
                         <?php 
                           $rowStatus = trim($item['status'] ?? 'In Progress');
                           $targetQ = floatval($item['target_qty'] ?? 0);
                           $okQ = floatval($item['ok_qty'] ?? 0);
                           $rejQ = floatval($item['rejected_qty'] ?? 0);
-                          $isComplete = ($targetQ > 0 && ($okQ + $rejQ) >= $targetQ) || ($targetQ == 0 && (strcasecmp($rowStatus, 'Completed') === 0 || strcasecmp($rowStatus, 'Complete') === 0));
+                          $rwQ = floatval($item['rework_qty'] ?? 0);
+                          $isComplete = (strcasecmp($rowStatus, 'Completed') === 0 || strcasecmp($rowStatus, 'Complete') === 0)
+                                     || ($targetQ > 0 && ($okQ + $rejQ) >= $targetQ)
+                                     || ($targetQ > 0 && ($okQ + $rejQ + $rwQ) >= $targetQ);
                         ?>
                         <?php if ($isComplete): ?>
                           <span class="tag tag-completed" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0;">
@@ -1447,9 +1472,9 @@ if (!function_exists('getPartProcessesList')) {
               <div style="font-size: 0.68rem; color: #059669; font-weight: 600;">PRODUCED OK</div>
               <div style="font-size: 1rem; font-weight: 700; color: #059669;" id="vOkQty">0</div>
             </div>
-            <div style="background: #fef2f2; padding: 8px; border-radius: 4px; border: 1px solid #fecaca;">
-              <div style="font-size: 0.68rem; color: #dc2626; font-weight: 600;">REJECTED</div>
-              <div style="font-size: 1rem; font-weight: 700; color: #dc2626;" id="vRejectedQty">0</div>
+            <div style="background: #fff7ed; padding: 8px; border-radius: 4px; border: 1px solid #fed7aa;">
+              <div style="font-size: 0.68rem; color: #ea580c; font-weight: 600;">REWORK QTY</div>
+              <div style="font-size: 1rem; font-weight: 700; color: #ea580c;" id="vRejectedQty">0</div>
             </div>
             <div style="background: #eff6ff; padding: 8px; border-radius: 4px; border: 1px solid #bfdbfe;">
               <div style="font-size: 0.68rem; color: #2563eb; font-weight: 600;">ACHIEVED</div>
@@ -1505,7 +1530,7 @@ if (!function_exists('getPartProcessesList')) {
   <div id="processTimelineSliderOverlay" class="slider-overlay"></div>
 
   <div id="processTimelineSlider" class="slider-drawer">
-    <!-- Slider Header: Target Qty, Finished Goods (FG), Total Rejections Only -->
+    <!-- Slider Header: Target Qty, Finished Goods (FG), Total Rework Only -->
     <div class="slider-header">
       <div class="slider-header-wrap">
         <div class="slider-summary-grid">
@@ -1517,9 +1542,9 @@ if (!function_exists('getPartProcessesList')) {
             <div class="slider-stat-lbl">Finished Goods (FG)</div>
             <div class="slider-stat-val val-fg" id="sldStatPassed">0 NOS</div>
           </div>
-          <div class="slider-stat-card stat-card-rej">
-            <div class="slider-stat-lbl">Total Rejections</div>
-            <div class="slider-stat-val val-rej" id="sldStatRejected">0 NOS</div>
+          <div class="slider-stat-card stat-card-rej" style="border-left: 3px solid #ea580c; background: linear-gradient(180deg, #ffffff 0%, #fff7ed 100%);">
+            <div class="slider-stat-lbl" style="color: #ea580c;">Total Rework</div>
+            <div class="slider-stat-val val-rej" id="sldStatRejected" style="color: #ea580c;">0 NOS</div>
           </div>
         </div>
         <button type="button" class="slider-close-btn" id="btnCloseSlider" title="Close">&times;</button>
@@ -1720,26 +1745,33 @@ if (!function_exists('getPartProcessesList')) {
         tr.setAttribute('data-department', data.department || '');
         tr.setAttribute('data-received_by', data.received_by || '');
         tr.setAttribute('data-process_name', data.process_name);
-        tr.setAttribute('data-target_qty', data.target_qty);
-        tr.setAttribute('data-ok_qty', data.ok_qty);
+        const tgt = parseFloat(data.target_qty || 0);
+        const ok = parseFloat(data.ok_qty || 0);
+        const rej = parseFloat(data.rejected_qty || 0);
+        const rw = parseFloat(data.rework_qty || 0);
+        const st = (data.status || '').toLowerCase();
+        const isRowComplete = (st === 'completed' || st === 'complete')
+          || (tgt > 0 && (ok + rej) >= tgt)
+          || (tgt > 0 && (ok + rej + rw) >= tgt);
+
+        tr.setAttribute('data-target_qty', data.target_qty || 0);
+        tr.setAttribute('data-ok_qty', data.ok_qty || 0);
         tr.setAttribute('data-rejected_qty', data.rejected_qty || 0);
+        tr.setAttribute('data-rework_qty', data.rework_qty || 0);
+        tr.setAttribute('data-is_rework', data.is_rework ? '1' : '0');
         tr.setAttribute('data-operator_name', data.operator_name || '');
         tr.setAttribute('data-uom', data.uom || 'PCS');
-        tr.setAttribute('data-status', data.status || 'In Progress');
+        tr.setAttribute('data-status', isRowComplete ? 'Completed' : (data.status || 'In Progress'));
         tr.setAttribute('data-created_at', data.created_at ? data.created_at.substring(0, 10) : new Date().toISOString().substring(0, 10));
 
         const rejCell = parseFloat(data.rejected_qty || 0) > 0
-          ? `<strong style="color: #dc2626;">${formatNumber(data.rejected_qty)}</strong>`
+          ? `<strong style="color: #ea580c;">${formatNumber(data.rejected_qty)}</strong>`
           : `<span style="color: #94a3b8;">-</span>`;
 
         const recByHtml = data.received_by ? `<br><span style="font-size: 0.72rem; color: var(--text-sub);">Rec: ${escapeHtml(data.received_by)}</span>` : '';
         const createDateStr = data.created_at ? formatDateDMY(data.created_at) : formatDateDMY(new Date().toISOString());
         const partStages = getPartStagesForJs(data.part_code);
 
-        const tgt = parseFloat(data.target_qty || 0);
-        const ok = parseFloat(data.ok_qty || 0);
-        const rej = parseFloat(data.rejected_qty || 0);
-        const isRowComplete = (tgt > 0 && (ok + rej) >= tgt) || (tgt === 0 && (data.status === 'Completed' || data.status === 'Complete'));
         const statusBadgeHtml = isRowComplete
           ? `<span class="tag tag-completed" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0;"><span style="width: 6px; height: 6px; border-radius: 50%; background: #16a34a;"></span>Complete</span>`
           : `<span class="tag tag-in-progress" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;"><span style="width: 6px; height: 6px; border-radius: 50%; background: #2563eb;"></span>Progress</span>`;
@@ -1751,6 +1783,7 @@ if (!function_exists('getPartProcessesList')) {
           </td>
           <td style="white-space: nowrap;">
             <strong style="color: #1e293b;">${escapeHtml(data.mip_no || '-')}</strong>
+            ${data.is_rework ? '<span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>' : ''}
           </td>
           <td style="white-space: nowrap;">
             <span style="font-weight: 500; color: #334155;">${escapeHtml(data.customer_name || '-')}</span>
@@ -1760,6 +1793,9 @@ if (!function_exists('getPartProcessesList')) {
           </td>
           <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; color: #1e293b;">
             ${formatNumber(data.target_qty)} <span style="font-size: 0.76rem; color: #64748b; font-weight: 500;">${escapeHtml(data.uom || 'PCS')}</span>
+          </td>
+          <td style="text-align: center; font-variant-numeric: tabular-nums; font-weight: 700; color: #16a34a;">
+            ${formatNumber(data.ok_qty || 0)} <span style="font-size: 0.76rem; color: #059669; font-weight: 500;">${escapeHtml(data.uom || 'PCS')}</span>
           </td>
           <td style="text-align: center; white-space: nowrap;">
             ${statusBadgeHtml}
@@ -1797,6 +1833,7 @@ if (!function_exists('getPartProcessesList')) {
           targetQty: parseFloat(row.getAttribute('data-target_qty') || 0),
           okQty: parseFloat(row.getAttribute('data-ok_qty') || 0),
           rejectedQty: parseFloat(row.getAttribute('data-rejected_qty') || 0),
+          reworkQty: parseFloat(row.getAttribute('data-rework_qty') || 0),
           uom: row.getAttribute('data-uom') || 'PCS',
           status: row.getAttribute('data-status') || 'Completed',
           createdAt: row.getAttribute('data-created_at') || ''
@@ -1812,9 +1849,14 @@ if (!function_exists('getPartProcessesList')) {
           createDateEl.textContent = data.createdAt ? formatDateDMY(data.createdAt) : formatDateDMY(new Date().toISOString());
         }
 
-        const statusTag = data.status === 'Completed'
+        const stLower = (data.status || '').toLowerCase();
+        const isComp = (stLower === 'completed' || stLower === 'complete')
+          || (data.targetQty > 0 && (data.okQty + data.rejectedQty) >= data.targetQty)
+          || (data.targetQty > 0 && (data.okQty + data.rejectedQty + (data.reworkQty || 0)) >= data.targetQty);
+
+        const statusTag = isComp
           ? '<span class="tag tag-completed">Completed</span>'
-          : (data.status === 'In Progress' 
+          : (stLower === 'in progress' || stLower === 'progress'
               ? '<span class="tag tag-in-progress">In Progress</span>' 
               : '<span class="tag" style="background:#fffbeb; color:#b45309; border:1px solid #fde68a;">On Hold</span>');
         document.getElementById('vStatusTag').innerHTML = statusTag;
@@ -1950,8 +1992,10 @@ if (!function_exists('getPartProcessesList')) {
         // Update Slider Sub-Header Meta
         const elMetaMip = document.getElementById('sldMetaMip');
         const elMetaPart = document.getElementById('sldMetaPart');
-        const elMetaDate = document.getElementById('sldMetaDate');
-        if (elMetaMip) elMetaMip.textContent = mip || '-';
+        const isRw = Boolean(rowData.isRework || (row ? (row.getAttribute('data-is_rework') === '1') : false));
+        if (elMetaMip) {
+          elMetaMip.innerHTML = (escapeHtml(mip || '-')) + (isRw ? ' <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>' : '');
+        }
         if (elMetaPart) elMetaPart.textContent = `${rowData.partCode || ''} ${rowData.partName ? '- ' + rowData.partName : ''}`.trim() || partName;
         if (elMetaDate) elMetaDate.textContent = rowData.createdAt ? formatDateDMY(rowData.createdAt) : '-';
 
@@ -1968,7 +2012,7 @@ if (!function_exists('getPartProcessesList')) {
             <div style="padding: 40px 20px; text-align: center; color: #64748b;">
               <div style="display: inline-block; width: 34px; height: 34px; border: 3px solid #e2e8f0; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
               <div style="margin-top: 12px; font-weight: 700; font-size: 0.90rem; color: #1e293b;">Loading Workflow Progress &amp; Breakdown...</div>
-              <div style="font-size: 0.78rem; color: #94a3b8; margin-top: 4px;">Calculating live stage-by-stage pass &amp; rejection percentages</div>
+              <div style="font-size: 0.78rem; color: #94a3b8; margin-top: 4px;">Calculating live stage-by-stage pass &amp; rework percentages</div>
             </div>
           `;
         }
@@ -2064,7 +2108,7 @@ if (!function_exists('getPartProcessesList')) {
 
           const segments = [];
           if (pass > 0) segments.push({ pct: passPct, color: '#2563eb', label: 'Passed' });
-          if (rej > 0) segments.push({ pct: rejPct, color: '#8b5cf6', label: 'Rejected' });
+          if (rej > 0) segments.push({ pct: rejPct, color: '#ea580c', label: 'Rework' });
           if (remPct > 0.05) segments.push({ pct: remPct, color: '#cbd5e1', label: 'Pending' });
 
           if (segments.length === 0) {
@@ -2158,8 +2202,8 @@ if (!function_exists('getPartProcessesList')) {
                 </span>
 
                 <span class="simple-stat-pill simple-stat-rej">
-                  <span class="simple-stat-dot" style="background: #8b5cf6;"></span>
-                  <span class="simple-stat-label">Rejected:</span>
+                  <span class="simple-stat-dot" style="background: #ea580c;"></span>
+                  <span class="simple-stat-label">Rework:</span>
                   <strong>${st.rejected_qty} ${uom}</strong>
                   <span class="simple-stat-pct">${rejPct}%</span>
                 </span>
@@ -2175,7 +2219,7 @@ if (!function_exists('getPartProcessesList')) {
               </div>
 
               <!-- Sleek Multi-segment Progress Bar -->
-              <div class="simple-progress-bar" title="Passed: ${passPct}% | Rejected: ${rejPct}% | Pending: ${remPct}%">
+              <div class="simple-progress-bar" title="Passed: ${passPct}% | Rework: ${rejPct}% | Pending: ${remPct}%">
                 <div class="simple-bar-seg pass" style="width: ${passPct}%;"></div>
                 <div class="simple-bar-seg rej" style="width: ${rejPct}%;"></div>
                 <div class="simple-bar-seg rem" style="width: ${remPct}%;"></div>
@@ -2473,7 +2517,7 @@ if (!function_exists('getPartProcessesList')) {
                 <tr>
                   <th>Target / Planned</th>
                   <th>Produced (OK Qty)</th>
-                  <th>Rejected / Scrap</th>
+                  <th>Rework Qty</th>
                   <th>Total Inspected</th>
                   <th>Quality Yield %</th>
                   <th>Achievement %</th>
@@ -2483,7 +2527,7 @@ if (!function_exists('getPartProcessesList')) {
                 <tr>
                   <td>${formatNumber(data.targetQty)} ${escapeHtml(data.uom)}</td>
                   <td style="color:#059669;">${formatNumber(data.okQty)} ${escapeHtml(data.uom)}</td>
-                  <td style="color:${data.rejectedQty > 0 ? '#dc2626' : '#64748b'};">${formatNumber(data.rejectedQty)} ${escapeHtml(data.uom)}</td>
+                  <td style="color:${data.rejectedQty > 0 ? '#ea580c' : '#64748b'};">${formatNumber(data.rejectedQty)} ${escapeHtml(data.uom)}</td>
                   <td>${formatNumber(totalInsp)} ${escapeHtml(data.uom)}</td>
                   <td style="color:#059669;">${yieldPercent}%</td>
                   <td style="color:#2563eb;">${achPercent}%</td>
@@ -2501,7 +2545,7 @@ if (!function_exists('getPartProcessesList')) {
                 <td>
                   <div class="sig-title">INSPECTED BY (QUALITY / QC)</div>
                   <div class="sig-space"></div>
-                  <div class="sig-line">Signature & Date: OK / Rejected Verified</div>
+                  <div class="sig-line">Signature & Date: OK / Rework Verified</div>
                 </td>
                 <td>
                   <div class="sig-title">AUTHORIZED BY (SUPERVISOR)</div>
@@ -2700,10 +2744,13 @@ if (!function_exists('getPartProcessesList')) {
         rows.forEach(r => {
           const ok = parseFloat(r.getAttribute('data-ok_qty') || 0);
           const rej = parseFloat(r.getAttribute('data-rejected_qty') || 0);
+          const isRework = (r.getAttribute('data-is_rework') || '0') === '1';
           const pDate = r.getAttribute('data-created_at') || '';
 
           sumOk += ok;
-          sumRej += rej;
+          if (!isRework) {
+            sumRej += rej;
+          }
           if (pDate === todaySqlStr) {
             todayOk += ok;
           }

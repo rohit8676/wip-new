@@ -66,7 +66,7 @@ try {
         }
 
         $sql = "
-            SELECT id, mip_no, customer_name, so_number, part_code, part_name,
+            SELECT id, mip_no, is_rework, customer_name, so_number, part_code, part_name,
                    process_name, target_qty, ok_qty, rejected_qty,
                    operator_name, uom, status,
                    CONVERT(VARCHAR(16), created_at, 120) AS created_at
@@ -87,7 +87,7 @@ try {
             'process_name' => 'Process Stage',
             'target_qty' => 'Target Plan',
             'ok_qty' => 'OK Output',
-            'rejected_qty' => 'Rejection / Scrap',
+            'rejected_qty' => 'Rework Qty',
             'operator_name' => 'Operator',
             'uom' => 'UOM',
             'status' => 'Status',
@@ -107,7 +107,7 @@ try {
             ['label' => 'Total Entries', 'value' => count($rows)],
             ['label' => 'Total Target Planned', 'value' => number_format($totalTarget)],
             ['label' => 'Total OK Produced', 'value' => number_format($totalOk), 'highlight' => 'green'],
-            ['label' => 'Total Scrapped', 'value' => number_format($totalRej), 'highlight' => ($totalRej > 0 ? 'red' : '')],
+            ['label' => 'Total Rework', 'value' => number_format($totalRej), 'highlight' => ($totalRej > 0 ? 'amber' : '')],
             ['label' => 'Overall Yield Rate', 'value' => $yieldRate . '%', 'highlight' => ($yieldRate >= 90 ? 'green' : 'amber')]
         ];
     }

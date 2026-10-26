@@ -9,10 +9,15 @@ require_once __DIR__ . '/includes/rbac.php';
 
 $editId = isset($_GET['id']) ? intval($_GET['id']) : 0;
 $isEditMode = ($editId > 0);
+$prefillMip = isset($_GET['mip']) ? trim($_GET['mip']) : '';
+$isReworkPrefill = !empty($_GET['rework']) ? 1 : 0;
 
 if ($isEditMode) {
     requirePermission('production', 'update');
     $pageTitle = 'Edit Production Entry (DPR)';
+} elseif ($isReworkPrefill) {
+    requirePermission('production', 'create');
+    $pageTitle = 'Log Rework Production Entry (DPR)';
 } else {
     requirePermission('production', 'create');
     $pageTitle = 'Log Production Entry (DPR)';
@@ -75,13 +80,15 @@ if ($pdo) {
             $processList = $stmtProc->fetchAll(PDO::FETCH_ASSOC);
         }
 
-        // Fetch all issued MIP records
+        // Fetch all issued MIP records including status and rework fields
         $stmtMips = $pdo->query("
             SELECT id, issue_no, 
                    CONVERT(VARCHAR(10), issue_date, 120) as issue_date,
                    customer_name, customer_code, so_number,
                    part_code, part_name, issued_qty, uom, 
                    received_by, remarks, 
+                   status, rework_qty, rework_completed_qty, rework_pending_qty,
+                   closure_status, closure_history,
                    child_parts_details
             FROM material_issue
             ORDER BY id DESC
@@ -91,7 +98,7 @@ if ($pdo) {
         }
 
         // Fetch already saved production entries to prevent duplicate saves
-        $stmtLogged = $pdo->query("SELECT id, mip_no, part_code FROM production_entry");
+        $stmtLogged = $pdo->query("SELECT id, mip_no, part_code, is_rework, status FROM production_entry");
         $loggedProductionList = $stmtLogged ? $stmtLogged->fetchAll(PDO::FETCH_ASSOC) : [];
 
         // If edit mode, load existing entry
@@ -100,7 +107,7 @@ if ($pdo) {
                 SELECT id, mip_no, customer_name, customer_code, so_number, work_order, part_code, part_name,
                        department, received_by, process_name,
                        target_qty, ok_qty, rejected_qty,
-                       operator_name, uom, status,
+                       operator_name, uom, status, is_rework, entry_type, rework_source_entry_id,
                        CONVERT(VARCHAR(10), created_at, 120) as entry_date,
                        CONVERT(VARCHAR(19), created_at, 120) as created_at
                 FROM production_entry
@@ -494,6 +501,28 @@ if ($pdo) {
             <input type="hidden" id="inputTargetQty" value="<?php echo htmlspecialchars($existingEntry['target_qty'] ?? '0'); ?>">
             <input type="hidden" id="inputOkQty" value="<?php echo htmlspecialchars($existingEntry['ok_qty'] ?? '0'); ?>">
             <input type="hidden" id="inputRejectedQty" value="<?php echo htmlspecialchars($existingEntry['rejected_qty'] ?? '0'); ?>">
+            <input type="hidden" id="inputIsRework" value="<?php echo !empty($existingEntry['is_rework']) ? 1 : ($isReworkPrefill ? 1 : 0); ?>">
+            <input type="hidden" id="inputEntryType" value="<?php echo htmlspecialchars($existingEntry['entry_type'] ?? ($isReworkPrefill ? 'Rework' : 'Regular')); ?>">
+            <input type="hidden" id="inputReworkSourceEntryId" value="<?php echo htmlspecialchars($existingEntry['rework_source_entry_id'] ?? ''); ?>">
+
+            <!-- Rework Mode Banner -->
+            <div id="reworkModeBanner" style="display: <?php echo ($isReworkPrefill || !empty($existingEntry['is_rework'])) ? 'block' : 'none'; ?>; background: #fff7ed; border: 1.5px solid #fed7aa; border-radius: 8px; padding: 12px 16px; margin-top: 14px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <div style="width: 32px; height: 32px; border-radius: 6px; background: #ea580c; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; font-weight: 800;">⟳</div>
+                  <div>
+                    <div style="font-size: 0.90rem; font-weight: 700; color: #9a3412;">Rework Production Entry Mode</div>
+                    <div style="font-size: 0.80rem; color: #c2410c;">
+                      This entry logs approved rework parts back into production under the original MIP No.
+                      Available Pending Rework: <strong id="reworkQuotaText">0 NOS</strong>
+                    </div>
+                  </div>
+                </div>
+                <span style="font-size: 0.74rem; padding: 3px 10px; border-radius: 9999px; background: #ffedd5; color: #c2410c; font-weight: 700; border: 1px solid #fed7aa;">
+                  ⟳ Rework Entry
+                </span>
+              </div>
+            </div>
 
             <!-- Fetched Material Issue Details Table (Shows once Customer & Part selected) -->
             <div id="fetchedMipTableWrap" style="margin-top: 18px; display: none;">
@@ -672,6 +701,8 @@ if ($pdo) {
         echo json_encode($catalog, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); 
       ?>;
       const globalProcessList = <?php echo json_encode($processList, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+      const prefillMipNo = <?php echo json_encode($prefillMip); ?>;
+      const isReworkPrefill = <?php echo $isReworkPrefill ? 'true' : 'false'; ?>;
 
       // Populate Customer Dropdown (ONLY customer name)
       function initCustomerDropdown(selectedCustomer = '') {
@@ -746,12 +777,18 @@ if ($pdo) {
           return;
         }
 
-        // Filter out already saved MIP parts (except current record in edit mode)
+        // Filter MIP parts: allow unsaved MIPs OR MIPs with pending rework quantity!
         const availableCustomerMips = allCustomerMips.filter(m => {
           const mIssueNo = (m.issue_no || '').trim().toLowerCase();
           const mPartCode = (m.part_code || '').trim().toLowerCase();
+          const reworkPending = parseFloat(m.rework_pending_qty || 0);
+
+          // If there is pending rework, it MUST be allowed for rework entry!
+          if (reworkPending > 0) return true;
+
           const isAlreadySaved = loggedProductionEntries.some(lp => {
             if (isEdit && String(lp.id) === String(editPrdId.value)) return false;
+            if (lp.is_rework == 1) return false;
             const lpMip = (lp.mip_no || '').trim().toLowerCase();
             const lpPart = (lp.part_code || '').trim().toLowerCase();
             return lpMip && lpPart && lpMip === mIssueNo && lpPart === mPartCode;
@@ -782,11 +819,25 @@ if ($pdo) {
           opt.setAttribute('data-mip', issueNo);
           opt.setAttribute('data-part-code', m.part_code || '');
 
+          const reworkPending = parseFloat(m.rework_pending_qty || 0);
+          const isAlreadySaved = loggedProductionEntries.some(lp => {
+            if (lp.is_rework == 1) return false;
+            const lpMip = (lp.mip_no || '').trim().toLowerCase();
+            const lpPart = (lp.part_code || '').trim().toLowerCase();
+            return lpMip && lpPart && lpMip === issueNo.toLowerCase() && lpPart === (m.part_code || '').toLowerCase();
+          });
+
+          const isReworkOpt = (reworkPending > 0 && isAlreadySaved) || (isReworkPrefill && reworkPending > 0);
+          opt.setAttribute('data-rework-pending', reworkPending);
+          opt.setAttribute('data-is-rework', isReworkOpt ? '1' : '0');
+
           const pName = (m.part_name || (partsCatalog[m.part_code] ? partsCatalog[m.part_code].part_name : m.part_code) || '').trim();
           opt.setAttribute('data-part-name', pName);
 
-          // Display Part Name and MIP No.
-          if (issueNo) {
+          // Display Part Name and MIP No with rework badge if applicable
+          if (isReworkOpt) {
+            opt.textContent = `${pName} (${issueNo}) [⟳ Rework Pending: ${reworkPending} NOS]`;
+          } else if (issueNo) {
             opt.textContent = `${pName} (${issueNo})`;
           } else {
             opt.textContent = pName;
@@ -962,10 +1013,46 @@ if ($pdo) {
           if (inputProcess) inputProcess.value = 'New Line up';
 
           // 4. Target Qty & UOM (Synced to hidden fields)
-          const qty = parseFloat(match.issued_qty || 0);
-          if (inputTargetQty) inputTargetQty.value = qty > 0 ? qty : '0';
-          if (inputOkQty) inputOkQty.value = qty > 0 ? qty : '0';
-          if (inputRejectedQty) inputRejectedQty.value = '0';
+          const optSelected = prdPartSelect ? prdPartSelect.selectedOptions[0] : null;
+          const optIsRework = optSelected ? (optSelected.getAttribute('data-is-rework') === '1') : false;
+          const rPending = parseFloat(match.rework_pending_qty || 0);
+
+          // Check if regular entry already saved for this MIP
+          const hasRegularSaved = loggedProductionEntries.some(lp => {
+            if (lp.is_rework == 1) return false;
+            return (lp.mip_no || '').trim().toLowerCase() === (match.issue_no || '').trim().toLowerCase();
+          });
+
+          const isReworkMode = isReworkPrefill || optIsRework || (rPending > 0 && hasRegularSaved);
+
+          const reworkBanner = document.getElementById('reworkModeBanner');
+          const reworkQuotaText = document.getElementById('reworkQuotaText');
+          const inputIsRework = document.getElementById('inputIsRework');
+          const inputEntryType = document.getElementById('inputEntryType');
+
+          let qty = 0;
+          if (isReworkMode) {
+            if (inputIsRework) inputIsRework.value = '1';
+            if (inputEntryType) inputEntryType.value = 'Rework';
+            if (reworkBanner) reworkBanner.style.display = 'block';
+            if (reworkQuotaText) reworkQuotaText.textContent = `${rPending} ${match.uom || 'PCS'}`;
+
+            qty = rPending > 0 ? rPending : 0;
+            if (inputTargetQty) {
+              inputTargetQty.value = qty;
+              inputTargetQty.max = rPending;
+            }
+          } else {
+            if (inputIsRework) inputIsRework.value = '0';
+            if (inputEntryType) inputEntryType.value = 'Regular';
+            if (reworkBanner) reworkBanner.style.display = 'none';
+
+            qty = parseFloat(match.issued_qty || 0);
+            if (inputTargetQty) inputTargetQty.value = qty > 0 ? qty : '0';
+          }
+
+          if (inputOkQty) inputOkQty.value = isEdit ? (inputOkQty.value || '0') : '0';
+          if (inputRejectedQty) inputRejectedQty.value = isEdit ? (inputRejectedQty.value || '0') : '0';
           if (match.uom) {
             document.getElementById('inputUom').value = match.uom;
           }
@@ -983,7 +1070,7 @@ if ($pdo) {
           if (elCust) elCust.textContent = match.customer_name || '-';
           if (elPartCode) elPartCode.textContent = pCode || '-';
           if (elPartName) elPartName.textContent = pName || '-';
-          if (elQty) elQty.textContent = `${qty} ${match.uom || 'PCS'}`;
+          if (elQty) elQty.textContent = isReworkMode ? `${qty} ${match.uom || 'PCS'} (Pending Rework)` : `${qty} ${match.uom || 'PCS'}`;
           if (elReceivedBy) elReceivedBy.textContent = match.received_by || '-';
           if (elDate) elDate.textContent = match.issue_date || '-';
 
@@ -995,8 +1082,9 @@ if ($pdo) {
           // Duplicate validation check on selected MIP part
           const mIssueNo = (match.issue_no || '').trim().toLowerCase();
           const mPartCode = pCode.trim().toLowerCase();
-          const isAlreadySaved = loggedProductionEntries.some(lp => {
+          const isAlreadySaved = !isReworkMode && loggedProductionEntries.some(lp => {
             if (isEdit && String(lp.id) === String(editPrdId.value)) return false;
+            if (lp.is_rework == 1) return false;
             const lpMip = (lp.mip_no || '').trim().toLowerCase();
             const lpPart = (lp.part_code || '').trim().toLowerCase();
             return lpMip && lpPart && lpMip === mIssueNo && lpPart === mPartCode;
@@ -1010,13 +1098,24 @@ if ($pdo) {
               submitBtn.style.opacity = '0.5';
               submitBtn.title = 'Cannot save duplicate MIP Part entry';
             }
+          } else if (isReworkMode && rPending <= 0) {
+            showToast(`No pending rework quota remaining for MIP slip '${match.issue_no}'.`, 'error');
+            if (submitBtn) {
+              submitBtn.disabled = true;
+              submitBtn.style.opacity = '0.5';
+              submitBtn.title = 'No pending rework quantity';
+            }
           } else {
             if (submitBtn) {
               submitBtn.disabled = false;
               submitBtn.style.opacity = '1';
               submitBtn.title = '';
             }
-            showToast(`Part ${pName} data loaded (Stage: New Line up)!`, 'success');
+            if (isReworkMode) {
+              showToast(`Rework Mode activated for ${match.issue_no} (${qty} NOS pending rework)!`, 'success');
+            } else {
+              showToast(`Part ${pName} data loaded (Stage: New Line up)!`, 'success');
+            }
             if (inputOperator) inputOperator.focus();
           }
         } else {
@@ -1085,16 +1184,22 @@ if ($pdo) {
           return;
         }
 
-        // Validate duplicate MIP Part
-        const isDuplicate = loggedProductionEntries.some(lp => {
-          if (id && String(lp.id) === String(id)) return false;
-          const lpMip = (lp.mip_no || '').trim().toLowerCase();
-          const lpPart = (lp.part_code || '').trim().toLowerCase();
-          return lpMip && lpPart && lpMip === mipNo.toLowerCase() && lpPart === partCode.toLowerCase();
-        });
-        if (isDuplicate) {
-          showToast(`Production entry for MIP slip '${mipNo}' (Part: ${partCode}) is already saved. Duplicate entries are not allowed.`, 'error');
-          return;
+        const isReworkVal = parseInt(document.getElementById('inputIsRework').value || 0);
+        const entryTypeVal = document.getElementById('inputEntryType').value || 'Regular';
+
+        // Validate duplicate MIP Part (Regular only; Rework entries are allowed)
+        if (!isReworkVal) {
+          const isDuplicate = loggedProductionEntries.some(lp => {
+            if (id && String(lp.id) === String(id)) return false;
+            if (lp.is_rework == 1) return false;
+            const lpMip = (lp.mip_no || '').trim().toLowerCase();
+            const lpPart = (lp.part_code || '').trim().toLowerCase();
+            return lpMip && lpPart && lpMip === mipNo.toLowerCase() && lpPart === partCode.toLowerCase();
+          });
+          if (isDuplicate) {
+            showToast(`Production entry for MIP slip '${mipNo}' (Part: ${partCode}) is already saved. Duplicate entries are not allowed.`, 'error');
+            return;
+          }
         }
 
         const payload = {
@@ -1115,7 +1220,9 @@ if ($pdo) {
           rejected_qty: rejectedQty,
           operator_name: operatorName,
           uom: uom,
-          status: status
+          status: status,
+          is_rework: isReworkVal,
+          entry_type: entryTypeVal
         };
 
         const submitBtn = document.getElementById('savePrdSubmitBtn');
@@ -1202,6 +1309,20 @@ if ($pdo) {
         const match = availableMips.find(m => m.issue_no === initialMip) || { part_code: initialPart, issued_qty: <?php echo floatval($existingEntry['target_qty'] ?? 0); ?> };
         renderChildParts(match, <?php echo floatval($existingEntry['target_qty'] ?? 0); ?>);
         if (tblWrap) tblWrap.style.display = 'block';
+      } else if (!isEdit && prefillMipNo) {
+        // Auto-select MIP when redirected from MIP list or Process Completion banner (?mip=MIP-XXX&rework=1)
+        const found = (availableMips || []).find(m => (m.issue_no || '').toLowerCase() === prefillMipNo.toLowerCase());
+        if (found) {
+          const custName = found.customer_name || '';
+          if (custName && prdCustomerSelect) {
+            prdCustomerSelect.value = custName;
+            populatePartDropdown(custName, found.issue_no || found.part_code);
+            if (prdPartSelect) {
+              prdPartSelect.value = found.issue_no || found.part_code;
+              loadDataForPart(prdPartSelect.value);
+            }
+          }
+        }
       }
 
     });

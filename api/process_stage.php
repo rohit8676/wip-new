@@ -1,4 +1,5 @@
 <?php
+ob_start();
 /**
  * WIP Management Portal - Process Stage Execution API
  * Endpoint: /api/process_stage.php
@@ -275,6 +276,10 @@ if ($method === 'POST') {
     $action = trim($data['action'] ?? 'save_stage');
     $entryId = intval($data['production_entry_id'] ?? ($data['entry_id'] ?? 0));
     $mipNo = trim($data['mip_no'] ?? '');
+    $operatorName = trim($data['operator_name'] ?? ($currentUser['name'] ?? 'Operator'));
+    $reworkSync = ['transferred' => 0, 'mip_no' => $mipNo];
+    $finalVarCode = '';
+    $finalVarName = '';
 
     if ($action === 'save_stage') {
         $stageOrder = intval($data['stage_order'] ?? 1);
@@ -415,13 +420,22 @@ if ($method === 'POST') {
                     $status,
                     $entryId
                 ]);
+
+                // Sync MIP status and automatically transfer rejected parts for rework upon completion
+                $reworkSync = syncMipStatusFromProductionEntry($pdo, $entryId, $finalOkQty, $totalRej, $status, $operatorName ?: ($currentUser['name'] ?? 'Operator'));
             }
 
             $pdo->commit();
 
+            if (ob_get_length()) ob_clean();
             echo json_encode([
                 'success' => true,
                 'message' => "Stage '{$processName}' saved successfully.",
+                'is_completed' => ($status === 'Completed'),
+                'total_rejected' => $totalRej ?? 0,
+                'final_ok' => $finalOkQty ?? 0,
+                'rework_transferred' => $reworkSync['transferred'] ?? 0,
+                'mip_no' => $reworkSync['mip_no'] ?? '',
                 'data' => [
                     'stage_order' => $stageOrder,
                     'process_name' => $processName,
@@ -444,9 +458,16 @@ if ($method === 'POST') {
     if ($action === 'save_all') {
         $stages = $data['stages'] ?? [];
         if (!is_array($stages) || empty($stages)) {
+            if (ob_get_length()) ob_clean();
             echo json_encode(['success' => false, 'message' => 'No stages data provided.']);
             exit;
         }
+
+        $operatorName = trim($data['operator_name'] ?? ($currentUser['name'] ?? 'Operator'));
+        $reworkSync = ['transferred' => 0, 'mip_no' => $mipNo];
+        $finalVarCode = '';
+        $finalVarName = '';
+        $status = 'In Progress';
 
         try {
             $pdo->beginTransaction();
@@ -530,9 +551,14 @@ if ($method === 'POST') {
 
             // Update parent entry
             if ($entryId > 0) {
-                $targetQtyStmt = $pdo->prepare("SELECT target_qty FROM production_entry WHERE id = ?");
+                $targetQtyStmt = $pdo->prepare("SELECT target_qty, rework_qty, is_rework, rework_source_entry_id, status, mip_no FROM production_entry WHERE id = ?");
                 $targetQtyStmt->execute([$entryId]);
-                $targetQty = floatval($targetQtyStmt->fetchColumn() ?: 0);
+                $peRow = $targetQtyStmt->fetch(PDO::FETCH_ASSOC);
+                $targetQty = floatval($peRow['target_qty'] ?? 0);
+                $peReworkQty = floatval($peRow['rework_qty'] ?? 0);
+                $peIsRework = !empty($peRow['is_rework']);
+                $prevStatus = trim($peRow['status'] ?? '');
+                $peMip = trim($peRow['mip_no'] ?? '');
 
                 // Fetch accurate total rejections from all stages in this entry
                 $stSumRej = $pdo->prepare("SELECT SUM(rejected_qty) as total_rej FROM production_stage_log WHERE production_entry_id = ?");
@@ -547,9 +573,27 @@ if ($method === 'POST') {
                     $finalOkQty = floatval($finalOkDb);
                 }
 
-                // Order is ONLY completed when all target pieces are finished or rejected (FG OK + Rejections >= Target Qty)
+                // Check rework completed for this entry
+                $reworkDoneQty = 0;
+                if (!$peIsRework) {
+                    $stRwDone = $pdo->prepare("SELECT ISNULL(SUM(ok_qty), 0) FROM production_entry WHERE rework_source_entry_id = ? AND status = 'Completed'");
+                    $stRwDone->execute([$entryId]);
+                    $reworkDoneQty = floatval($stRwDone->fetchColumn() ?: 0);
+                    if ($reworkDoneQty <= 0 && !empty($peMip)) {
+                        $stRwDone2 = $pdo->prepare("SELECT ISNULL(SUM(ok_qty), 0) FROM production_entry WHERE mip_no = ? AND is_rework = 1 AND status = 'Completed'");
+                        $stRwDone2->execute([$peMip]);
+                        $reworkDoneQty = floatval($stRwDone2->fetchColumn() ?: 0);
+                    }
+                }
+
+                // Effective rejection on parent is cleared as rework finishes OK
+                $saveRejQty = max(0, $totalRej - $reworkDoneQty);
+
+                // Order is completed when target is accounted for (OK + Rejections, or OK + Rework Completed)
                 $status = 'In Progress';
-                if ($targetQty > 0 && ($finalOkQty + $totalRej) >= $targetQty) {
+                if ($targetQty > 0 && (($finalOkQty + $totalRej) >= $targetQty || ($finalOkQty + $reworkDoneQty) >= $targetQty)) {
+                    $status = 'Completed';
+                } elseif (strcasecmp($prevStatus, 'Completed') === 0 && ($finalOkQty + $saveRejQty + $reworkDoneQty) >= $targetQty) {
                     $status = 'Completed';
                 } else {
                     $status = 'In Progress';
@@ -570,7 +614,7 @@ if ($method === 'POST') {
                 ");
                 $stEntryUpd->execute([
                     $finalOkQty,
-                    $totalRej,
+                    $saveRejQty,
                     $maxCompletedOrder,
                     $lastProcName,
                     $totalStages,
@@ -579,24 +623,274 @@ if ($method === 'POST') {
                     $status,
                     $entryId
                 ]);
+
+                // Sync MIP status and automatically transfer rejected parts for rework upon completion
+                $reworkSync = syncMipStatusFromProductionEntry($pdo, $entryId, $finalOkQty, $totalRej, $status, $operatorName ?: ($currentUser['name'] ?? 'Operator'));
             }
 
             $pdo->commit();
 
+            if (ob_get_length()) ob_clean();
             echo json_encode([
                 'success' => true,
-                'message' => 'All process stages updated and saved successfully.'
+                'message' => 'All process stages updated and saved successfully.',
+                'is_completed' => ($status === 'Completed'),
+                'total_rejected' => $totalRej ?? 0,
+                'final_ok' => $finalOkQty ?? 0,
+                'rework_transferred' => $reworkSync['transferred'] ?? 0,
+                'mip_no' => $reworkSync['mip_no'] ?? ''
             ]);
         } catch (PDOException $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
             }
+            if (ob_get_length()) ob_clean();
             http_response_code(500);
             echo json_encode(['success' => false, 'message' => 'Failed to save stages: ' . $e->getMessage()]);
         }
         exit;
     }
 
+    if (ob_get_length()) ob_clean();
     echo json_encode(['success' => false, 'message' => 'Invalid action.']);
     exit;
+}
+
+/**
+ * Automatically sync MIP status and transfer rejected parts for Rework upon production completion
+ */
+function syncMipStatusFromProductionEntry($pdo, $entryId, $finalOkQty, $totalRej, $status, $operatorName = 'System') {
+    if (!$entryId || $entryId <= 0) return ['transferred' => 0];
+
+    $stEntry = $pdo->prepare("
+        SELECT id, mip_no, part_code, part_name, customer_name, target_qty, ok_qty, rejected_qty,
+               rework_qty, is_rework, entry_type, rework_source_entry_id
+        FROM production_entry
+        WHERE id = ?
+    ");
+    $stEntry->execute([$entryId]);
+    $entry = $stEntry->fetch(PDO::FETCH_ASSOC);
+    if (!$entry || empty($entry['mip_no'])) return ['transferred' => 0];
+
+    $mipNo = trim($entry['mip_no']);
+    $partCode = trim($entry['part_code'] ?? '');
+    $partName = trim($entry['part_name'] ?? '');
+    $isRework = !empty($entry['is_rework']) ? 1 : 0;
+
+    // Fetch material_issue record
+    $stMip = $pdo->prepare("
+        SELECT id, issue_no, status, rework_qty, rework_completed_qty, rework_pending_qty,
+               closure_status, closure_history
+        FROM material_issue
+        WHERE issue_no = ?
+    ");
+    $stMip->execute([$mipNo]);
+    $mip = $stMip->fetch(PDO::FETCH_ASSOC);
+    if (!$mip) return ['transferred' => 0, 'mip_no' => $mipNo];
+
+    $historyList = [];
+    if (!empty($mip['closure_history'])) {
+        $parsed = json_decode($mip['closure_history'], true);
+        if (is_array($parsed)) $historyList = $parsed;
+    }
+
+    $transferredQty = 0;
+
+    if ($status === 'Completed') {
+        if ($isRework) {
+            // Rework entry completed:
+            // 1. Credit rework_completed_qty and reduce/clear rework_pending_qty on material_issue
+            $stCredit = $pdo->prepare("
+                UPDATE material_issue
+                SET rework_completed_qty = rework_completed_qty + ?,
+                    rework_pending_qty = CASE WHEN rework_pending_qty >= ? THEN rework_pending_qty - ? ELSE 0 END,
+                    updated_at = GETDATE()
+                WHERE issue_no = ?
+            ");
+            $stCredit->execute([$finalOkQty, $finalOkQty, $finalOkQty, $mipNo]);
+
+            // 2. Clear the rejected quantity from the original production entry for this MIP
+            // (Finished ok_qty on original entry stays as-is; the rework ok_qty is finished in the rework entry)
+            $sourceEntryId = !empty($entry['rework_source_entry_id']) ? intval($entry['rework_source_entry_id']) : 0;
+            if ($sourceEntryId > 0) {
+                $stClearRej = $pdo->prepare("
+                    UPDATE production_entry
+                    SET rejected_qty = CASE WHEN rejected_qty >= ? THEN rejected_qty - ? ELSE 0 END,
+                        status = 'Completed',
+                        updated_at = GETDATE()
+                    WHERE id = ?
+                ");
+                $stClearRej->execute([$finalOkQty, $finalOkQty, $sourceEntryId]);
+            } else {
+                $stClearRej = $pdo->prepare("
+                    UPDATE production_entry
+                    SET rejected_qty = CASE WHEN rejected_qty >= ? THEN rejected_qty - ? ELSE 0 END,
+                        status = 'Completed',
+                        updated_at = GETDATE()
+                    WHERE mip_no = ? AND (is_rework = 0 OR is_rework IS NULL)
+                ");
+                $stClearRej->execute([$finalOkQty, $finalOkQty, $mipNo]);
+            }
+
+            // 3. Mark any rework transfers as Completed
+            $stTrans = $pdo->prepare("
+                UPDATE rework_transfers
+                SET status = 'Completed'
+                WHERE mip_no = ? AND status = 'Approved'
+            ");
+            $stTrans->execute([$mipNo]);
+
+            // Re-fetch pending qty
+            $stPending = $pdo->prepare("SELECT rework_pending_qty FROM material_issue WHERE issue_no = ?");
+            $stPending->execute([$mipNo]);
+            $pendingRework = floatval($stPending->fetchColumn() ?: 0);
+
+            // Check if any other rework entries are still open
+            $stActive = $pdo->prepare("
+                SELECT COUNT(*) FROM production_entry 
+                WHERE mip_no = ? AND is_rework = 1 AND status != 'Completed' AND id != ?
+            ");
+            $stActive->execute([$mipNo, $entryId]);
+            $activeReworkCount = intval($stActive->fetchColumn() ?: 0);
+
+            if ($pendingRework <= 0 && $activeReworkCount === 0) {
+                // All rework is completed! Close MIP
+                $historyList[] = [
+                    'event' => 'Rework Run Completed',
+                    'status' => 'Closed',
+                    'closure_status' => 'Rework Completed',
+                    'ok_qty' => $finalOkQty,
+                    'entry_id' => $entryId,
+                    'at' => date('Y-m-d H:i:s'),
+                    'by' => $operatorName,
+                    'reason' => 'All approved rework pieces have completed production and returned to FG. Original rework quantity cleared.'
+                ];
+                $stClose = $pdo->prepare("
+                    UPDATE material_issue
+                    SET status = 'Closed',
+                        closure_status = 'Rework Completed',
+                        closure_history = ?,
+                        updated_at = GETDATE()
+                    WHERE issue_no = ?
+                ");
+                $stClose->execute([json_encode($historyList), $mipNo]);
+            } else {
+                // Partial rework completed - keep status as Rework Pending
+                $historyList[] = [
+                    'event' => 'Partial Rework Completed',
+                    'status' => 'Rework Pending',
+                    'closure_status' => 'Pending Rework',
+                    'ok_qty' => $finalOkQty,
+                    'remaining_rework' => $pendingRework,
+                    'entry_id' => $entryId,
+                    'at' => date('Y-m-d H:i:s'),
+                    'by' => $operatorName,
+                    'reason' => "{$finalOkQty} rework NOS completed. {$pendingRework} NOS still pending rework."
+                ];
+                $stPart = $pdo->prepare("
+                    UPDATE material_issue
+                    SET status = 'Rework Pending',
+                        closure_status = 'Pending Rework',
+                        closure_history = ?,
+                        updated_at = GETDATE()
+                    WHERE issue_no = ?
+                ");
+                $stPart->execute([json_encode($historyList), $mipNo]);
+            }
+        } else {
+            // Regular entry completed!
+            // Automatically transfer rejected parts back to original MIP for Rework
+            if ($totalRej > 0) {
+                // Check already approved / transferred for this production entry
+                $stSumApp = $pdo->prepare("SELECT ISNULL(SUM(approved_rework_qty), 0) FROM rework_transfers WHERE production_entry_id = ?");
+                $stSumApp->execute([$entryId]);
+                $alreadyTransferred = floatval($stSumApp->fetchColumn() ?: 0);
+                $pendingTransfer = $totalRej - $alreadyTransferred;
+
+                if ($pendingTransfer > 0) {
+                    $transferredQty = $pendingTransfer;
+
+                    // 1. Record transfer in rework_transfers audit table
+                    $stInsTrans = $pdo->prepare("
+                        INSERT INTO rework_transfers (
+                            production_entry_id, mip_no, part_code, part_name,
+                            rejected_qty, approved_rework_qty, approved_by, reason, status, created_at
+                        ) VALUES (
+                            ?, ?, ?, ?,
+                            ?, ?, ?, ?, 'Approved', GETDATE()
+                        )
+                    ");
+                    $stInsTrans->execute([
+                        $entryId,
+                        $mipNo,
+                        $partCode,
+                        $partName,
+                        $totalRej,
+                        $pendingTransfer,
+                        $operatorName ?: 'Process Completion Auto-Transfer',
+                        "Auto-transferred {$pendingTransfer} rework NOS back to {$mipNo} after all processes completed"
+                    ]);
+
+                    // 2. Update production_entry rework_qty
+                    $stUpdPe = $pdo->prepare("UPDATE production_entry SET rework_qty = rework_qty + ? WHERE id = ?");
+                    $stUpdPe->execute([$pendingTransfer, $entryId]);
+
+                    // 3. Update material_issue: increase rework_qty, rework_pending_qty, and set status to 'Rework Pending'
+                    $historyList[] = [
+                        'event' => 'Process Rework Transferred',
+                        'status' => 'Rework Pending',
+                        'closure_status' => 'Pending Rework',
+                        'qty' => $pendingTransfer,
+                        'total_rejected' => $totalRej,
+                        'final_ok' => $finalOkQty,
+                        'entry_id' => $entryId,
+                        'at' => date('Y-m-d H:i:s'),
+                        'by' => $operatorName,
+                        'reason' => "Production completed with {$totalRej} rework NOS. {$pendingTransfer} NOS transferred back to {$mipNo} for Rework."
+                    ];
+
+                    $stUpdMi = $pdo->prepare("
+                        UPDATE material_issue
+                        SET rework_qty = rework_qty + ?,
+                            rework_pending_qty = rework_pending_qty + ?,
+                            status = 'Rework Pending',
+                            closure_status = 'Pending Rework',
+                            closure_history = ?,
+                            updated_at = GETDATE()
+                        WHERE issue_no = ?
+                    ");
+                    $stUpdMi->execute([$pendingTransfer, $pendingTransfer, json_encode($historyList), $mipNo]);
+                }
+            } else {
+                // 0 Rejections (100% OK output)
+                $historyList[] = [
+                    'event' => 'Production Completed 100% OK',
+                    'status' => 'Closed',
+                    'closure_status' => 'Production Completed',
+                    'ok_qty' => $finalOkQty,
+                    'entry_id' => $entryId,
+                    'at' => date('Y-m-d H:i:s'),
+                    'by' => $operatorName,
+                    'reason' => 'All issued parts finished successfully into FG with 100% OK output.'
+                ];
+                $stUpdMi = $pdo->prepare("
+                    UPDATE material_issue
+                    SET status = 'Closed',
+                        closure_status = 'Production Completed',
+                        closure_history = ?,
+                        updated_at = GETDATE()
+                    WHERE issue_no = ?
+                ");
+                $stUpdMi->execute([json_encode($historyList), $mipNo]);
+            }
+        }
+    }
+
+    return [
+        'transferred' => $transferredQty,
+        'mip_no' => $mipNo,
+        'total_rejected' => $totalRej,
+        'final_ok' => $finalOkQty,
+        'is_rework' => $isRework
+    ];
 }

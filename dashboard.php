@@ -52,9 +52,9 @@ if ($pdo) {
                 COUNT(*) AS total_runs,
                 ISNULL(SUM(target_qty), 0) AS target, 
                 ISNULL(SUM(ok_qty), 0) AS ok_q, 
-                ISNULL(SUM(rejected_qty), 0) AS rej_q,
-                COUNT(CASE WHEN status = 'In Progress' OR (target_qty > 0 AND (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0)) < target_qty) THEN 1 END) AS active_wip,
-                COUNT(CASE WHEN (target_qty > 0 AND (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0)) >= target_qty) OR (target_qty = 0 AND status = 'Completed') THEN 1 END) AS completed_wip
+                ISNULL(SUM(CASE WHEN is_rework = 0 OR is_rework IS NULL THEN rejected_qty ELSE 0 END), 0) AS rej_q,
+                COUNT(CASE WHEN status != 'Completed' AND (target_qty = 0 OR (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0) + ISNULL(rework_qty, 0)) < target_qty) THEN 1 END) AS active_wip,
+                COUNT(CASE WHEN status = 'Completed' OR (target_qty > 0 AND (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0) + ISNULL(rework_qty, 0)) >= target_qty) THEN 1 END) AS completed_wip
             FROM production_entry
         ")->fetch(PDO::FETCH_ASSOC);
         if ($prdRow) {
@@ -105,7 +105,7 @@ if ($pdo) {
         // Shop Floor Production Parts (Running & Completed)
         $runningParts = $pdo->query("
             SELECT TOP 100 id, mip_no, customer_name, customer_code, so_number, work_order, part_code, part_name,
-                   process_name, shift, target_qty, ok_qty, rejected_qty, operator_name, uom, status,
+                   process_name, shift, target_qty, ok_qty, rejected_qty, rework_qty, is_rework, operator_name, uom, status,
                    current_stage_order, current_stage_name, total_stages,
                    CONVERT(VARCHAR(10), created_at, 120) AS entry_date,
                    CONVERT(VARCHAR(16), created_at, 120) AS created_at
@@ -119,8 +119,11 @@ if ($pdo) {
             $tq = floatval($rp['target_qty'] ?? 0);
             $ok = floatval($rp['ok_qty'] ?? 0);
             $rej = floatval($rp['rejected_qty'] ?? 0);
+            $rw = floatval($rp['rework_qty'] ?? 0);
             $st = trim($rp['status'] ?? '');
-            $isDone = ($tq > 0 && ($ok + $rej) >= $tq) || ($tq == 0 && strcasecmp($st, 'Completed') === 0);
+            $isDone = (strcasecmp($st, 'Completed') === 0 || strcasecmp($st, 'Complete') === 0)
+                   || ($tq > 0 && ($ok + $rej) >= $tq)
+                   || ($tq > 0 && ($ok + $rej + $rw) >= $tq);
             $rp['effective_status'] = $isDone ? 'Completed' : 'In Progress';
             if ($isDone) {
                 $completedCount++;
@@ -133,7 +136,7 @@ if ($pdo) {
         // Recent Production Entries
         $recentProduction = $pdo->query("
             SELECT TOP 8 id, mip_no, work_order, part_code, part_name, process_name, shift, 
-                         target_qty, ok_qty, rejected_qty, operator_name, uom, status, 
+                         target_qty, ok_qty, rejected_qty, rework_qty, is_rework, operator_name, uom, status, 
                          CONVERT(VARCHAR(16), created_at, 120) AS created_at 
             FROM production_entry 
             ORDER BY id DESC
@@ -637,7 +640,7 @@ if ($pdo) {
       transform: translateY(-50%);
       width: 15px;
       height: 15px;
-      color: #94a3b8;
+      color: #1e293b;
       pointer-events: none;
     }
 
@@ -646,7 +649,7 @@ if ($pdo) {
       padding: 7px 32px 7px 32px;
       font-size: 0.82rem;
       border: 1px solid #cbd5e1;
-      border-radius: 6px;
+      border-radius: 3px;
       background: #ffffff;
       color: #1e293b;
       outline: none;
@@ -1348,23 +1351,22 @@ if ($pdo) {
             </div>
           </div>
 
-          <!-- Card 3: Quality & Rejections -->
+          <!-- Card 3: Quality & Rework -->
           <div class="kpi-box">
             <div class="kpi-box-head">
-              <span class="kpi-box-tag">Rejection & Scrap</span>
-              <div class="kpi-icon-circ rose">
+              <span class="kpi-box-tag">Total Rework</span>
+              <div class="kpi-icon-circ amber">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <line x1="15" y1="9" x2="9" y2="15"></line>
-                  <line x1="9" y1="9" x2="15" y2="15"></line>
+                  <polyline points="23 4 23 10 17 10"></polyline>
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
                 </svg>
               </div>
             </div>
-            <div class="kpi-box-val" id="valProdRej"><?php echo number_format($kpi['prod_rejected']); ?></div>
+            <div class="kpi-box-val" id="valProdRej" style="color: #ea580c;"><?php echo number_format($kpi['prod_rejected']); ?></div>
             <div class="kpi-box-foot">
-              <span>Scrap: <strong id="valRejRate"><?php echo $kpi['rejection_rate']; ?>%</strong></span>
-              <span class="kpi-chip <?php echo ($kpi['rejection_rate'] > 10 ? 'red' : 'green'); ?>" id="valQualityPill">
-                <?php echo ($kpi['rejection_rate'] > 10 ? 'High Scrap' : 'Optimal Quality'); ?>
+              <span>Rework: <strong id="valRejRate"><?php echo $kpi['rejection_rate']; ?>%</strong></span>
+              <span class="kpi-chip <?php echo ($kpi['rejection_rate'] > 10 ? 'amber' : 'green'); ?>" id="valQualityPill">
+                <?php echo ($kpi['rejection_rate'] > 10 ? 'High Rework' : 'Optimal Quality'); ?>
               </span>
             </div>
           </div>
@@ -1455,7 +1457,8 @@ if ($pdo) {
                     $effectiveStatus = $rp['effective_status'] ?? 'In Progress';
                     $isComp = ($effectiveStatus === 'Completed');
                     $statusClass = $isComp ? 'completed' : 'in-progress';
-                    $searchKeywords = strtolower($partTitle . ' ' . $partCode . ' ' . $mipNo . ' ' . $custTitle . ' ' . ($rp['work_order'] ?? '') . ' ' . ($rp['so_number'] ?? ''));
+                    $isRw = !empty($rp['is_rework']);
+                    $searchKeywords = strtolower($partTitle . ' ' . $partCode . ' ' . $mipNo . ' ' . ($isRw ? 'r rework ' : '') . $custTitle . ' ' . ($rp['work_order'] ?? '') . ' ' . ($rp['so_number'] ?? ''));
                 ?>
                 <div class="running-card-item <?php echo $isComp ? 'is-completed' : 'is-running'; ?>"
                      data-status="<?php echo $statusClass; ?>"
@@ -1478,7 +1481,12 @@ if ($pdo) {
                     </div>
                     <div class="running-part-meta">
                       <?php if (!empty($mipNo) && $mipNo !== '-'): ?>
-                        <span class="running-part-mip"><strong><?php echo $mipNo; ?></strong></span>
+                        <span class="running-part-mip">
+                          <strong><?php echo $mipNo; ?></strong>
+                          <?php if ($isRw): ?>
+                            <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>
+                          <?php endif; ?>
+                        </span>
                       <?php endif; ?>
                       <?php if (!empty($partCode)): ?>
                         <span class="running-part-code" title="Part Code"><?php echo $partCode; ?></span>
@@ -1496,6 +1504,7 @@ if ($pdo) {
                     <button type="button" class="btn-view"
                             data-id="<?php echo htmlspecialchars($rp['id']); ?>"
                             data-mip_no="<?php echo htmlspecialchars($rp['mip_no'] ?? ''); ?>"
+                            data-is_rework="<?php echo $isRw ? '1' : '0'; ?>"
                             data-part_name="<?php echo htmlspecialchars($rp['part_name'] ?: $rp['part_code']); ?>"
                             data-part_code="<?php echo htmlspecialchars($rp['part_code']); ?>"
                             data-customer_name="<?php echo htmlspecialchars($rp['customer_name'] ?? ''); ?>"
@@ -1549,12 +1558,12 @@ if ($pdo) {
                   </svg>
                   Shift-wise Production Performance
                 </h3>
-                <p class="viz-card-sub">Target Plan vs OK Output vs Rejections across shifts</p>
+                <p class="viz-card-sub">Target Plan vs OK Output vs Rework across shifts</p>
               </div>
               <div style="display: flex; gap: 12px; font-size: 0.75rem; font-weight: 600;">
                 <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; background: #cbd5e1; border-radius: 2px;"></span> Target</span>
                 <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; background: #10b981; border-radius: 2px;"></span> OK Qty</span>
-                <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; background: #ef4444; border-radius: 2px;"></span> Rejection</span>
+                <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; background: #ea580c; border-radius: 2px;"></span> Rework</span>
               </div>
             </div>
             
@@ -1642,7 +1651,7 @@ if ($pdo) {
                   </svg>
                   Quality & Yield Ratio
                 </h3>
-                <p class="viz-card-sub">Shop-Floor OK parts vs rejection scrap</p>
+                <p class="viz-card-sub">Shop-Floor OK parts vs rework parts</p>
               </div>
             </div>
 
@@ -1666,9 +1675,9 @@ if ($pdo) {
                   stroke-dashoffset="0"
                   transform="rotate(-90 110 95)" />
 
-                <!-- Rejection Segment -->
+                <!-- Donut Segment: Rework -->
                 <?php if ($kpi['prod_rejected'] > 0): ?>
-                <circle cx="110" cy="95" r="65" fill="none" stroke="#ef4444" stroke-width="22"
+                <circle cx="110" cy="95" r="65" fill="none" stroke="#ea580c" stroke-width="22"
                   stroke-dasharray="<?php echo $rejDash; ?> <?php echo $circ; ?>"
                   stroke-dashoffset="<?php echo -$okDash; ?>"
                   transform="rotate(-90 110 95)" />
@@ -1685,9 +1694,9 @@ if ($pdo) {
                   <span style="width: 10px; height: 10px; background: #10b981; border-radius: 50%;"></span>
                   OK: <?php echo number_format($kpi['prod_ok']); ?> (<?php echo $kpi['yield_rate']; ?>%)
                 </span>
-                <span style="color: #dc2626; display: flex; align-items: center; gap: 6px;">
-                  <span style="width: 10px; height: 10px; background: #ef4444; border-radius: 50%;"></span>
-                  Scrap: <?php echo number_format($kpi['prod_rejected']); ?> (<?php echo $kpi['rejection_rate']; ?>%)
+                <span style="color: #ea580c; display: flex; align-items: center; gap: 6px;">
+                  <span style="width: 10px; height: 10px; background: #ea580c; border-radius: 50%;"></span>
+                  Rework: <?php echo number_format($kpi['prod_rejected']); ?> (<?php echo $kpi['rejection_rate']; ?>%)
                 </span>
               </div>
             </div>
@@ -1720,7 +1729,7 @@ if ($pdo) {
                   <th>Shift</th>
                   <th>Target</th>
                   <th>OK Qty</th>
-                  <th>Rejected</th>
+                  <th>Rework</th>
                   <th>Operator</th>
                   <th>Status</th>
                   <th>Timestamp</th>
@@ -1732,11 +1741,18 @@ if ($pdo) {
                       $target = floatval($r['target_qty']);
                       $ok = floatval($r['ok_qty']);
                       $rej = floatval($r['rejected_qty']);
-                      $isCompleted = ($target > 0 && ($ok + $rej) >= $target) || ($target == 0 && strtolower($r['status'] ?? '') === 'completed');
+                      $rw = floatval($r['rework_qty'] ?? 0);
+                      $st = trim($r['status'] ?? '');
+                      $isCompleted = (strcasecmp($st, 'Completed') === 0 || strcasecmp($st, 'Complete') === 0)
+                                  || ($target > 0 && ($ok + $rej) >= $target)
+                                  || ($target > 0 && ($ok + $rej + $rw) >= $target);
                   ?>
                   <tr>
                     <td>
                       <strong><?php echo htmlspecialchars($r['mip_no'] ?? 'N/A'); ?></strong>
+                      <?php if (!empty($r['is_rework'])): ?>
+                        <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>
+                      <?php endif; ?>
                       <?php if (!empty($r['work_order'])): ?>
                       <div style="font-size: 0.74rem; color: var(--dash-muted);">WO: <?php echo htmlspecialchars($r['work_order']); ?></div>
                       <?php endif; ?>
@@ -1749,7 +1765,7 @@ if ($pdo) {
                     <td><strong><?php echo htmlspecialchars($r['shift'] ?? 'Shift'); ?></strong></td>
                     <td><?php echo number_format($target); ?> <?php echo htmlspecialchars($r['uom'] ?? 'PCS'); ?></td>
                     <td><strong style="color: #059669;"><?php echo number_format($ok); ?></strong></td>
-                    <td><span style="<?php echo ($rej > 0 ? 'color: #dc2626; font-weight: 700;' : 'color: var(--dash-muted);'); ?>"><?php echo number_format($rej); ?></span></td>
+                    <td><span style="<?php echo ($rej > 0 ? 'color: #ea580c; font-weight: 700;' : 'color: var(--dash-muted);'); ?>"><?php echo number_format($rej); ?></span></td>
                     <td><?php echo htmlspecialchars($r['operator_name'] ?? '-'); ?></td>
                     <td>
                       <span class="badge-status <?php echo ($isCompleted ? 'completed' : 'in-progress'); ?>">
@@ -1795,9 +1811,9 @@ if ($pdo) {
             <div class="slider-stat-lbl">Finished Goods (FG)</div>
             <div class="slider-stat-val val-fg" id="sldStatPassed">0 NOS</div>
           </div>
-          <div class="slider-stat-card stat-card-rej">
-            <div class="slider-stat-lbl">Total Rejections</div>
-            <div class="slider-stat-val val-rej" id="sldStatRejected">0 NOS</div>
+          <div class="slider-stat-card stat-card-rej" style="border-left: 3px solid #ea580c; background: linear-gradient(180deg, #ffffff 0%, #fff7ed 100%);">
+            <div class="slider-stat-lbl" style="color: #ea580c;">Total Rework</div>
+            <div class="slider-stat-val val-rej" id="sldStatRejected" style="color: #ea580c;">0 NOS</div>
           </div>
         </div>
         <button type="button" class="slider-close-btn" id="btnCloseSlider" title="Close">&times;</button>

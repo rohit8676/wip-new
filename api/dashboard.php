@@ -70,8 +70,8 @@ try {
             ISNULL(SUM(ok_qty), 0) AS total_ok_qty,
             ISNULL(SUM(rejected_qty), 0) AS total_rejected_qty,
             ISNULL(SUM(rework_qty), 0) AS total_rework_qty,
-            COUNT(CASE WHEN status = 'In Progress' OR (target_qty > 0 AND (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0)) < target_qty) THEN 1 END) AS active_wip_count,
-            COUNT(CASE WHEN (target_qty > 0 AND (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0)) >= target_qty) OR (target_qty = 0 AND status = 'Completed') THEN 1 END) AS completed_wip_count
+            COUNT(CASE WHEN status != 'Completed' AND (target_qty = 0 OR (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0) + ISNULL(rework_qty, 0)) < target_qty) THEN 1 END) AS active_wip_count,
+            COUNT(CASE WHEN status = 'Completed' OR (target_qty > 0 AND (ISNULL(ok_qty, 0) + ISNULL(rejected_qty, 0) + ISNULL(rework_qty, 0)) >= target_qty) THEN 1 END) AS completed_wip_count
         FROM production_entry
         $monthFilterSql
     ")->fetch(PDO::FETCH_ASSOC);
@@ -152,7 +152,7 @@ try {
     // -------------------------------------------------------------
     $runningParts = $pdo->query("
         SELECT TOP 100 id, mip_no, customer_name, customer_code, so_number, work_order, part_code, part_name,
-               process_name, shift, target_qty, ok_qty, rejected_qty, operator_name, uom, status,
+               process_name, shift, target_qty, ok_qty, rejected_qty, rework_qty, is_rework, operator_name, uom, status,
                current_stage_order, current_stage_name, total_stages,
                CONVERT(VARCHAR(10), created_at, 120) AS entry_date,
                CONVERT(VARCHAR(16), created_at, 120) AS created_at
@@ -167,8 +167,11 @@ try {
         $tq = floatval($rp['target_qty'] ?? 0);
         $ok = floatval($rp['ok_qty'] ?? 0);
         $rej = floatval($rp['rejected_qty'] ?? 0);
+        $rw = floatval($rp['rework_qty'] ?? 0);
         $st = trim($rp['status'] ?? '');
-        $isDone = ($tq > 0 && ($ok + $rej) >= $tq) || ($tq == 0 && strcasecmp($st, 'Completed') === 0);
+        $isDone = (strcasecmp($st, 'Completed') === 0 || strcasecmp($st, 'Complete') === 0)
+               || ($tq > 0 && ($ok + $rej) >= $tq)
+               || ($tq > 0 && ($ok + $rej + $rw) >= $tq);
         $rp['effective_status'] = $isDone ? 'Completed' : 'In Progress';
         if ($isDone) {
             $runningPartsCompCount++;
@@ -184,7 +187,7 @@ try {
     $recentProduction = $pdo->query("
         SELECT TOP 8
             id, mip_no, work_order, part_code, part_name,
-            process_name, shift, target_qty, ok_qty, rejected_qty,
+            process_name, shift, target_qty, ok_qty, rejected_qty, rework_qty, is_rework,
             operator_name, uom, status,
             CONVERT(VARCHAR(16), created_at, 120) AS created_at
         FROM production_entry

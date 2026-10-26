@@ -96,8 +96,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const qualityPill = document.getElementById('valQualityPill');
         if (qualityPill) {
-          qualityPill.textContent = (k.rejection_rate > 10 ? 'High Scrap' : 'Optimal Quality');
-          qualityPill.className = 'kpi-chip ' + (k.rejection_rate > 10 ? 'red' : 'green');
+          qualityPill.textContent = (k.rejection_rate > 10 ? 'High Rework' : 'Optimal Quality');
+          qualityPill.className = 'kpi-chip ' + (k.rejection_rate > 10 ? 'amber' : 'green');
         }
 
         setVal('valRmStock', Number(k.rm_stock || 0).toLocaleString() + ' KG');
@@ -197,11 +197,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 const workOrder = escapeHtml(rp.work_order || '');
                 const soNumber = escapeHtml(rp.so_number || '');
                 const isDone = (rp.effective_status === 'Completed') || (targetQ > 0 && (okQ + rejQ) >= targetQ);
+                const isRework = Boolean(rp.is_rework && (rp.is_rework == 1 || rp.is_rework === '1' || rp.is_rework === true));
                 const statusClass = isDone ? 'completed' : 'in-progress';
                 const effectiveStatus = isDone ? 'Completed' : 'In Progress';
-                const searchKeywords = escapeHtml(`${partTitle} ${partCode} ${mipNo} ${custName} ${workOrder} ${soNumber}`.toLowerCase());
+                const searchKeywords = escapeHtml(`${partTitle} ${partCode} ${mipNo} ${isRework ? 'r rework ' : ''}${custName} ${workOrder} ${soNumber}`.toLowerCase());
 
-                const mipBadge = (mipNo && mipNo !== '-') ? `<span class="running-part-mip"><strong>${mipNo}</strong></span>` : '';
+                const reworkTag = isRework ? '<span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>' : '';
+                const mipBadge = (mipNo && mipNo !== '-') ? `<span class="running-part-mip"><strong>${mipNo}</strong>${reworkTag}</span>` : '';
                 const codeBadge = partCode ? `<span class="running-part-code" title="Part Code">${partCode}</span>` : '';
                 const statusPill = isDone
                   ? `<span class="running-status-pill comp"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> Completed</span>`
@@ -234,6 +236,7 @@ document.addEventListener('DOMContentLoaded', () => {
                       <button type="button" class="btn-view"
                               data-id="${encodeURIComponent(rp.id)}"
                               data-mip_no="${encodeURIComponent(mipNo)}"
+                              data-is_rework="${isRework ? '1' : '0'}"
                               data-part_name="${escapeHtml(partTitle)}"
                               data-part_code="${escapeHtml(partCode)}"
                               data-customer_name="${escapeHtml(custName)}"
@@ -281,7 +284,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const target = Number(r.target_qty || 0);
                 const ok = Number(r.ok_qty || 0);
                 const rej = Number(r.rejected_qty || 0);
-                const isCompleted = (target > 0 && (ok + rej) >= target) || (target === 0 && (r.status || '').toLowerCase() === 'completed');
+                const rw = Number(r.rework_qty || 0);
+                const st = (r.status || '').toLowerCase();
+                const isCompleted = (st === 'completed' || st === 'complete')
+                  || (target > 0 && (ok + rej) >= target)
+                  || (target > 0 && (ok + rej + rw) >= target);
                 const statusClass = isCompleted ? 'completed' : 'in-progress';
                 const statusText = isCompleted ? 'Completed' : 'In Progress';
 
@@ -384,7 +391,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const elMetaMip = document.getElementById('sldMetaMip');
     const elMetaPart = document.getElementById('sldMetaPart');
     const elMetaDate = document.getElementById('sldMetaDate');
-    if (elMetaMip) elMetaMip.textContent = mip || '-';
+    const isRw = Boolean(data.isRework || (data.is_rework == 1 || data.is_rework === '1' || data.is_rework === true));
+    if (elMetaMip) {
+      elMetaMip.innerHTML = (escapeHtml(mip || '-')) + (isRw ? ' <span style="margin-left: 4px; font-size: 0.70rem; padding: 1px 6px; border-radius: 9999px; background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; font-weight: 700; white-space: nowrap;" title="Rework">R</span>' : '');
+    }
     if (elMetaPart) elMetaPart.textContent = `${data.partCode || ''} ${data.partName ? '- ' + data.partName : ''}`.trim() || data.partName || '-';
     if (elMetaDate) elMetaDate.textContent = data.createdAt ? formatDateDMY(data.createdAt) : '-';
 
@@ -408,7 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div style="padding: 40px 20px; text-align: center; color: #64748b;">
           <div style="display: inline-block; width: 34px; height: 34px; border: 3px solid #e2e8f0; border-top-color: #2563eb; border-radius: 50%; animation: spin-loop 0.8s linear infinite;"></div>
           <div style="margin-top: 12px; font-weight: 700; font-size: 0.90rem; color: #1e293b;">Loading Workflow Progress &amp; Breakdown...</div>
-          <div style="font-size: 0.78rem; color: #94a3b8; margin-top: 4px;">Calculating live stage-by-stage pass &amp; rejection percentages</div>
+          <div style="font-size: 0.78rem; color: #94a3b8; margin-top: 4px;">Calculating live stage-by-stage pass &amp; rework percentages</div>
         </div>
       `;
     }
@@ -656,6 +666,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const data = {
       id: viewBtn.getAttribute('data-id') || '',
       mipNo: viewBtn.getAttribute('data-mip_no') || '',
+      isRework: viewBtn.getAttribute('data-is_rework') === '1',
       partName: viewBtn.getAttribute('data-part_name') || '',
       partCode: viewBtn.getAttribute('data-part_code') || '',
       customerName: viewBtn.getAttribute('data-customer_name') || '',
