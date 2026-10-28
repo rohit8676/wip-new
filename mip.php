@@ -1433,7 +1433,7 @@ $pageTitle = 'Material Issue for Production (MIP)';
               <div style="flex: 1;">
                 <div style="font-weight: 700; font-size: 0.88rem; margin-bottom: 3px;">Material Issue Blocked: Insufficient RM & Child Part Stock</div>
                 <div style="font-size: 0.82rem; line-height: 1.45; color: #b91c1c;">
-                  <strong>${totalShortages} RM & child part(s)</strong> me required quantity (${qtyDesc}) ke anusaar stock kam hai. Production me material issue save karne ka option band kar diya gaya hai. Kripya pehle stock inward karein.
+                  <strong>${totalShortages} Insuffient Stock (${qtyDesc})  
                 </div>
               </div>
             </div>
@@ -1456,7 +1456,7 @@ $pageTitle = 'Material Issue for Production (MIP)';
               <div style="margin-top: 10px; padding: 10px 14px; background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 8px; color: #15803d; display: flex; align-items: center; gap: 8px;">
                 <span style="font-size: 1.15rem; line-height: 1;">✓</span>
                 <div style="font-size: 0.82rem; font-weight: 600;">
-                  Sabhi RM & child parts ka sufficient stock uplabdh hai (${formatStock(rawQty)} ${uom}). Issue save karne ke liye ready hai.
+                  Ready (${formatStock(rawQty)} ${uom}).
                 </div>
               </div>
             `;
